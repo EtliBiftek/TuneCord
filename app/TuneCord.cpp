@@ -1,5 +1,4 @@
-#define UNICODE
-#define _UNICODE
+#define NOMINMAX
 #define WIN32_LEAN_AND_MEAN
 
 #include <winsock2.h>
@@ -742,6 +741,9 @@ void BridgeServer() {
 
 void ApplyFont(HWND control) { SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(g_font), TRUE); }
 
+void SetButtonCheck(HWND control, UINT state) { SendMessageW(control, BM_SETCHECK, state, 0); }
+UINT GetButtonCheck(HWND control) { return static_cast<UINT>(SendMessageW(control, BM_GETCHECK, 0, 0)); }
+
 HWND AddControl(const wchar_t* cls, const wchar_t* text, DWORD style, int x, int y, int w, int h, int id) {
     HWND control = CreateWindowExW(0, cls, text, WS_CHILD | WS_VISIBLE | style, x, y, w, h, g_window,
                                    reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), g_instance, nullptr);
@@ -791,10 +793,10 @@ void RefreshUi(bool refillPlaylists = false) {
         config = g_config;
         track = g_track;
     }
-    Button_SetCheck(GetDlgItem(g_window, IDC_ENABLED), config.enabled ? BST_CHECKED : BST_UNCHECKED);
-    Button_SetCheck(GetDlgItem(g_window, IDC_STARTUP), StartupEnabled() ? BST_CHECKED : BST_UNCHECKED);
-    Button_SetCheck(GetDlgItem(g_window, IDC_ALL_TRACKS), config.selectedOnly ? BST_UNCHECKED : BST_CHECKED);
-    Button_SetCheck(GetDlgItem(g_window, IDC_SELECTED_ONLY), config.selectedOnly ? BST_CHECKED : BST_UNCHECKED);
+    SetButtonCheck(GetDlgItem(g_window, IDC_ENABLED), config.enabled ? BST_CHECKED : BST_UNCHECKED);
+    SetButtonCheck(GetDlgItem(g_window, IDC_STARTUP), StartupEnabled() ? BST_CHECKED : BST_UNCHECKED);
+    SetButtonCheck(GetDlgItem(g_window, IDC_ALL_TRACKS), config.selectedOnly ? BST_UNCHECKED : BST_CHECKED);
+    SetButtonCheck(GetDlgItem(g_window, IDC_SELECTED_ONLY), config.selectedOnly ? BST_CHECKED : BST_UNCHECKED);
     SetWindowTextW(GetDlgItem(g_window, IDC_DISCORD_ID), Utf8ToWide(config.discordAppId).c_str());
 
     const long long now = static_cast<long long>(std::time(nullptr));
@@ -827,8 +829,8 @@ void SaveUiSettings() {
         std::lock_guard lock(g_stateMutex);
         updated = g_config;
     }
-    updated.enabled = Button_GetCheck(GetDlgItem(g_window, IDC_ENABLED)) == BST_CHECKED;
-    updated.selectedOnly = Button_GetCheck(GetDlgItem(g_window, IDC_SELECTED_ONLY)) == BST_CHECKED;
+    updated.enabled = GetButtonCheck(GetDlgItem(g_window, IDC_ENABLED)) == BST_CHECKED;
+    updated.selectedOnly = GetButtonCheck(GetDlgItem(g_window, IDC_SELECTED_ONLY)) == BST_CHECKED;
     updated.discordAppId = appId;
     updated.selectedPlaylistIds.clear();
     int count = ListView_GetItemCount(g_playlistView);
@@ -953,15 +955,15 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
             else if (id == IDC_ENABLED && HIWORD(wParam) == BN_CLICKED) {
                 {
                     std::lock_guard lock(g_stateMutex);
-                    g_config.enabled = Button_GetCheck(GetDlgItem(hwnd, IDC_ENABLED)) == BST_CHECKED;
+                    g_config.enabled = GetButtonCheck(GetDlgItem(hwnd, IDC_ENABLED)) == BST_CHECKED;
                     SaveConfigLocked();
                 }
                 ProcessPresence();
             } else if (id == IDC_STARTUP && HIWORD(wParam) == BN_CLICKED) {
-                bool enable = Button_GetCheck(GetDlgItem(hwnd, IDC_STARTUP)) == BST_CHECKED;
+                bool enable = GetButtonCheck(GetDlgItem(hwnd, IDC_STARTUP)) == BST_CHECKED;
                 if (!SetStartupEnabled(enable)) {
                     MessageBoxW(hwnd, L"Başlangıç ayarı değiştirilemedi.", kWindowTitle, MB_OK | MB_ICONERROR);
-                    Button_SetCheck(GetDlgItem(hwnd, IDC_STARTUP), StartupEnabled() ? BST_CHECKED : BST_UNCHECKED);
+                    SetButtonCheck(GetDlgItem(hwnd, IDC_STARTUP), StartupEnabled() ? BST_CHECKED : BST_UNCHECKED);
                 }
             } else if (id == IDC_ALL_TRACKS || id == IDC_SELECTED_ONLY) {
                 {
