@@ -12,6 +12,13 @@ TuneCord, YouTube ve YouTube Music'te dinlediğin parçayı yerel masaüstü uyg
 - Google OAuth yok
 - Ayarlar için ayrı **Kaydet** düğmesi yok; değişiklikler anında kaydedilir
 - Windows ile otomatik başlatma ve tray desteği
+- Düşük bellekli native tray backend: pencere kapalıyken Electron çalışmaz
+
+## Düşük RAM mimarisi
+
+TuneCord v1.4 ile Discord RPC, WebSocket bridge, tray, tarayıcı algılama ve ayar saklama küçük bir native Rust arka plan servisinde çalışır. Electron yalnızca ayarlar penceresini açtığında başlatılır; pencereyi kapattığında Electron tamamen kapanır ve tray'de sadece native servis kalır.
+
+Hedef, sistem ve Windows sürümüne göre değişmekle birlikte tray kullanımını yaklaşık **5–15 MB RAM** bandına yaklaştırmaktır. Ayarlar penceresi açıkken WebView/Chromium tabanlı Electron süreci nedeniyle RAM kullanımı geçici olarak daha yüksek olur.
 
 ## Kurulum
 
@@ -23,7 +30,7 @@ Chrome, Brave, Edge, Vivaldi, Opera ve diğer Chromium tabanlı tarayıcılarda:
 
 1. TuneCord kurulumunda tarayıcını seç.
 2. **Dosyaları hazırla** düğmesine bas.
-3. Tarayıcının eklentiler sayfasını aç (`chrome://extensions/`, `brave://extensions/` vb.).
+3. Seçtiğin tarayıcının eklentiler sayfası otomatik açılır.
 4. **Geliştirici modu / Developer mode** seçeneğini aç.
 5. **Paketlenmemiş öğe yükle / Load unpacked** düğmesine bas.
 6. TuneCord'un gösterdiği `%APPDATA%\TuneCord\extension` klasörünü seç.
@@ -35,36 +42,36 @@ Firefox, Firefox Developer Edition, LibreWolf, Waterfox, Floorp, Zen Browser ve 
 
 1. TuneCord kurulumunda tarayıcını seç.
 2. **Dosyaları hazırla** düğmesine bas.
-3. `about:debugging#/runtime/this-firefox` sayfasını aç.
+3. `about:debugging#/runtime/this-firefox` sayfası otomatik açılır.
 4. **Load Temporary Add-on / Geçici eklenti yükle** seçeneğine bas.
 5. TuneCord'un gösterdiği `%APPDATA%\TuneCord\extension-firefox\manifest.json` dosyasını seç.
 6. YouTube veya YouTube Music sekmesini yenile.
 
-> Standart Firefox sürümleri imzasız eklentileri kalıcı olarak kurmaz. Bu nedenle yerel geliştirme sürümü Firefox yeniden başlatıldığında tekrar yüklenmelidir. Kalıcı kurulum için Mozilla tarafından imzalanmış bir XPI gerekir.
+> Standart Firefox sürümleri imzasız eklentileri kalıcı olarak kurmaz. Kalıcı kurulum için Mozilla tarafından imzalanmış bir XPI gerekir.
 
 ## Discord Application ID
 
-TuneCord varsayılan olarak şu Application ID ile gelir:
+Varsayılan Application ID:
 
 ```text
 1545256357727576124
 ```
 
-İstersen kendi Discord uygulamanın Application ID'sini kullanabilirsin. Masaüstü uygulamasında ve eklenti ayarlarında **Standarta dön** düğmesi varsayılan ID'yi geri yükler.
+İstersen kendi Discord uygulamanın Application ID'sini kullanabilirsin. **Standarta dön** düğmesi varsayılan ID'yi geri yükler.
 
 ## Otomatik kayıt
 
-Presence aç/kapat, Windows ile başlatma, Discord Application ID, playlist modu ve playlist seçimleri değiştirildiği anda kaydedilir. Application ID geçerli hale geldiğinde kısa bir debounce sonrasında yeni Discord bağlantısı otomatik başlatılır.
+Presence aç/kapat, Windows ile başlatma, Discord Application ID, playlist modu ve playlist seçimleri değiştirildiği anda kaydedilir.
 
-## Yerel WebSocket
+## Yerel bağlantı
 
-Eklenti ve masaüstü uygulaması şu yerel adres üzerinden haberleşir:
+Eklenti ve native arka plan servisi şu yerel adres üzerinden haberleşir:
 
 ```text
 ws://127.0.0.1:37645/ws
 ```
 
-Bağlantı yalnızca loopback arayüzünde dinler. Chromium ve Firefox eklentilerinin sabit extension ID'leri doğrulanır ve eşleşme token'ı yerel olarak saklanır.
+Bağlantı yalnızca `127.0.0.1` üzerinde dinler.
 
 ## Google OAuth yok
 
