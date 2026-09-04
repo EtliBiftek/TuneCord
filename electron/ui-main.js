@@ -53,14 +53,25 @@ async function currentBackend() {
   try { return await backend("GET", "/api/state", undefined, 500); } catch (_) { return null; }
 }
 
-async function waitForBackend(ms = 5000) {
+async function waitForBackend(ms = 7000, child = null) {
   const end = Date.now() + ms;
   while (Date.now() < end) {
     const state = await currentBackend();
     if (state?.backend === "native") return state;
+    if (child && child.exitCode !== null) {
+      throw new Error(`TuneCord native arka plan servisi erken kapandı (kod ${child.exitCode}).`);
+    }
     await sleep(80);
   }
   throw new Error("TuneCord native arka plan servisi başlatılamadı.");
+}
+
+function replaceHelperBinary(source, target) {
+  const temp = `${target}.new`;
+  try { fs.rmSync(temp, { force: true }); } catch (_) {}
+  fs.copyFileSync(source, temp);
+  try { fs.rmSync(target, { force: true }); } catch (_) {}
+  fs.renameSync(temp, target);
 }
 
 async function ensureHelper() {
@@ -75,7 +86,7 @@ async function ensureHelper() {
   let state = await currentBackend();
   if (state?.backend === "native" && state.helperVersion !== VERSION) {
     try { await backend("POST", "/api/shutdown", {}); } catch (_) {}
-    for (let i = 0; i < 30 && await currentBackend(); i++) await sleep(80);
+    for (let i = 0; i < 50 && await currentBackend(); i++) await sleep(80);
     state = await currentBackend();
   }
   if (state && state.backend !== "native") {
@@ -83,7 +94,9 @@ async function ensureHelper() {
   }
 
   if (!state) {
-    if (!fs.existsSync(helperPath)) fs.copyFileSync(bundledHelper, helperPath);
+    // Aynı sürüm numarasıyla yeni bir build indirilmiş olsa bile eski/bzuk helper'ı
+    // yeniden kullanma. Paket içindeki helper her başlangıçta tazelenir.
+    replaceHelperBinary(bundledHelper, helperPath);
     const launcher = process.env.PORTABLE_EXECUTABLE_FILE || process.execPath;
     const child = spawn(helperPath, ["--background", "--app-exe", launcher], {
       detached: true,
@@ -91,7 +104,7 @@ async function ensureHelper() {
       windowsHide: true
     });
     child.unref();
-    state = await waitForBackend();
+    state = await waitForBackend(7000, child);
   }
 
   helperReady = true;
