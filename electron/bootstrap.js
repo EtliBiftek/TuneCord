@@ -2,7 +2,7 @@ const fs = require("fs");
 const path = require("path");
 const Module = require("module");
 
-const parts = [1, 2, 3].map(index =>
+const parts = [1, 2, 3, 4].map(index =>
   fs.readFileSync(path.join(__dirname, `main-v13.part${index}.jsfrag`), "utf8")
 );
 const compiled = new Module(path.join(__dirname, "main-v13.js"), module);
