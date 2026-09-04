@@ -1,6 +1,6 @@
 {
   "name": "tunecord",
-  "version": "1.4.2",
+  "version": "1.4.3",
   "description": "YouTube and YouTube Music Discord presence bridge",
   "main": "electron/ui-main.js",
   "author": "TuneCord",
@@ -31,6 +31,7 @@
       { "from": "extension", "to": "extension", "filter": ["**/*"] },
       { "from": "extension-firefox", "to": "extension-firefox", "filter": ["**/*"] },
       { "from": "native-helper/target/release/tunecord-helper.exe", "to": "tunecord-helper.exe" },
+      { "from": "native-host/target/release/tunecord-native-host.exe", "to": "tunecord-native-host.exe" },
       { "from": "build/icon.ico", "to": "tunecord-icon.ico" }
     ],
     "win": {
