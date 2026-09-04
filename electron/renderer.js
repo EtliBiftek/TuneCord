@@ -20,6 +20,14 @@ function selectedIds() {
   return [...document.querySelectorAll("#playlistList .playlist-item input:checked")].map(input => input.value);
 }
 
+function isManualInstallBrowser(browser) {
+  return browser?.id === "brave" || browser?.id === "chrome";
+}
+
+function extensionsPage(browser) {
+  return browser?.id === "brave" ? "brave://extensions/" : "chrome://extensions/";
+}
+
 function setSetupStep(step) {
   setupStep = step;
   for (const number of [1, 2, 3]) {
@@ -147,7 +155,7 @@ function render(next) {
   $("browserBadge").textContent = browser?.name || "Seçilmedi";
   $("browserName").textContent = browser?.name || "Tarayıcı seçilmedi";
   $("browserPath").textContent = browser?.path || "Kurulum sihirbazını çalıştır.";
-  $("installState").textContent = state.extensionInstalled ? "Hazır" : "Kurulu değil";
+  $("installState").textContent = state.extensionInstalled ? "Dosyalar hazır" : "Kurulu değil";
   $("liveExtensionState").textContent = state.extensionConnected ? "Bağlı" : "Bekleniyor";
   $("openBrowser").disabled = !browser;
 
@@ -183,27 +191,53 @@ $("rescanBrowsers").addEventListener("click", scanBrowsers);
 $("browserNext").addEventListener("click", () => {
   const browser = detectedBrowsers.find(item => item.id === selectedSetupBrowserId);
   if (!browser) return;
-  $("installDescription").textContent = `${browser.name} seçildi. TuneCord eklentiyi hazırlayıp ${browser.name}'ı eklentiyle başlatacak.`;
+
+  if (isManualInstallBrowser(browser)) {
+    $("installDescription").textContent = `${browser.name} seçildi. Bu tarayıcıda eklentiyi sessizce kalıcı yüklemek güvenilir olmadığı için TuneCord eklenti dosyalarını hazırlayacak; son yükleme onayını sen tarayıcıdan vereceksin.`;
+    $("installExtension").textContent = "Dosyaları hazırla";
+  } else {
+    $("installDescription").textContent = `${browser.name} seçildi. TuneCord eklentiyi hazırlayıp ${browser.name}'ı eklentiyle başlatacak.`;
+    $("installExtension").textContent = "Eklentiyi kur";
+  }
+
   $("installMessage").textContent = "";
   setSetupStep(2);
 });
 $("setupBack").addEventListener("click", () => setSetupStep(1));
 $("installExtension").addEventListener("click", async () => {
   const button = $("installExtension");
+  const browser = detectedBrowsers.find(item => item.id === selectedSetupBrowserId);
+  const manual = isManualInstallBrowser(browser);
   button.disabled = true;
-  button.textContent = "Kuruluyor…";
+  button.textContent = manual ? "Hazırlanıyor…" : "Kuruluyor…";
   $("installMessage").textContent = "";
+
   try {
     const result = await window.tuneCord.installExtension(selectedSetupBrowserId);
     state = result.state;
-    const browserName = result.browser?.name || "Tarayıcı";
-    $("successText").textContent = `${browserName} eklentiyle açıldı. Tarayıcı ek bir güvenlik onayı gösterirse onayladıktan sonra YouTube'da bir şarkı başlatabilirsin.`;
+    const browserName = result.browser?.name || browser?.name || "Tarayıcı";
+
+    if (manual) {
+      const page = extensionsPage(result.browser || browser);
+      const pathText = result.extensionPath || state.extensionPath || "%APPDATA%\\TuneCord\\browser-extension";
+      const title = $("setupStep3").querySelector("h1");
+      title.textContent = "Eklentiyi tarayıcıya ekle.";
+      $("successText").style.whiteSpace = "pre-line";
+      $("successText").textContent = `${browserName}, kalıcı otomatik eklenti kurulumuna izin vermediği için son adımı elle tamamlaman gerekiyor.\n\nEklenti klasörü:\n${pathText}\n\n1. ${page} adresini aç.\n2. Sağ üstten “Geliştirici modu / Developer mode” seçeneğini aç.\n3. “Paketlenmemiş öğe yükle / Load unpacked” düğmesine bas.\n4. Yukarıdaki TuneCord eklenti klasörünü seç.\n5. TuneCord eklentisi listede görününce YouTube veya YouTube Music'i yenile.\n\nNot: Az önce açılan YouTube sekmesi eklentinin kurulduğu anlamına gelmiyor; yukarıdaki adımlar tamamlanmalı.`;
+      $("finishSetup").textContent = "Adımları yaptım, TuneCord'u aç";
+    } else {
+      $("setupStep3").querySelector("h1").textContent = "Kurulum tamamlandı.";
+      $("successText").style.whiteSpace = "normal";
+      $("successText").textContent = `${browserName} eklentiyle açıldı. Tarayıcı ek bir güvenlik onayı gösterirse onayladıktan sonra YouTube'da bir şarkı başlatabilirsin.`;
+      $("finishSetup").textContent = "TuneCord'u aç";
+    }
+
     setSetupStep(3);
   } catch (error) {
     $("installMessage").textContent = error.message;
   } finally {
     button.disabled = false;
-    button.textContent = "Eklentiyi kur";
+    button.textContent = manual ? "Dosyaları hazırla" : "Eklentiyi kur";
   }
 });
 $("skipSetup").addEventListener("click", async () => {
@@ -243,7 +277,9 @@ $("openBrowser").addEventListener("click", async () => {
   button.disabled = true;
   try {
     await window.tuneCord.launchBrowser();
-    $("message").textContent = "Tarayıcı TuneCord eklentisiyle açıldı.";
+    $("message").textContent = state.selectedBrowserId === "brave" || state.selectedBrowserId === "chrome"
+      ? "Tarayıcı açıldı. Eklentiyi bir kez Load unpacked ile kurduysan normal şekilde çalışır."
+      : "Tarayıcı TuneCord eklentisiyle açıldı.";
     $("message").className = "form-message";
   } catch (error) {
     $("message").textContent = error.message;
