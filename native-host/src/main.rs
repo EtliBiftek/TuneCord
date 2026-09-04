@@ -1,16 +1,16 @@
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 use std::{
     env,
     fs,
     io::{self, Read, Write},
     net::TcpStream,
     path::PathBuf,
-    process,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::Duration,
 };
 
 const PORT: u16 = 37645;
-const BACKEND_STALE_AFTER: Duration = Duration::from_secs(4);
+const CHROMIUM_EXTENSION_ID: &str = "mfhiohlcbedfhemkommfailjjfkdfobe";
+const FIREFOX_EXTENSION_ID: &str = "tunecord@etlibiftek.local";
 
 fn appdata_dir() -> PathBuf {
     let root = env::var_os("APPDATA")
@@ -27,23 +27,31 @@ fn bridge_token() -> String {
         .unwrap_or_default()
 }
 
-fn caller_origin() -> String {
-    env::args()
-        .skip(1)
-        .find(|arg| arg.starts_with("chrome-extension://") || arg.starts_with("moz-extension://"))
-        .unwrap_or_else(|| "chrome-extension://mfhiohlcbedfhemkommfailjjfkdfobe/".to_string())
+#[derive(Clone)]
+struct Caller {
+    extension_id: String,
+    family: &'static str,
 }
 
-fn caller_extension_id(origin: &str) -> String {
-    origin
-        .split_once("://")
-        .map(|(_, rest)| rest.trim_end_matches('/').to_string())
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| "mfhiohlcbedfhemkommfailjjfkdfobe".to_string())
-}
+fn caller() -> Caller {
+    let args: Vec<String> = env::args().skip(1).collect();
 
-fn browser_family(origin: &str) -> &'static str {
-    if origin.starts_with("moz-extension://") { "firefox" } else { "chromium" }
+    if let Some(origin) = args.iter().find(|arg| arg.starts_with("chrome-extension://")) {
+        let extension_id = origin
+            .split_once("://")
+            .map(|(_, rest)| rest.trim_end_matches('/').to_string())
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| CHROMIUM_EXTENSION_ID.to_string());
+        return Caller { extension_id, family: "chromium" };
+    }
+
+    // Firefox passes the native-host manifest path followed by the add-on ID,
+    // rather than Chrome's chrome-extension:// origin argument.
+    if args.iter().any(|arg| arg == FIREFOX_EXTENSION_ID) {
+        return Caller { extension_id: FIREFOX_EXTENSION_ID.to_string(), family: "firefox" };
+    }
+
+    Caller { extension_id: CHROMIUM_EXTENSION_ID.to_string(), family: "chromium" }
 }
 
 fn read_native_message<R: Read>(reader: &mut R) -> io::Result<Option<Value>> {
@@ -75,149 +83,92 @@ fn write_native_message<W: Write>(writer: &mut W, value: &Value) -> io::Result<(
     writer.flush()
 }
 
-fn websocket_handshake(stream: &mut TcpStream) -> Result<(), String> {
-    let request = concat!(
-        "GET /ws HTTP/1.1\r\n",
-        "Host: 127.0.0.1:37645\r\n",
-        "Upgrade: websocket\r\n",
-        "Connection: Upgrade\r\n",
-        "Sec-WebSocket-Version: 13\r\n",
-        "Sec-WebSocket-Key: dHVuZWNvcmQtbmF0aXZlIQ==\r\n",
-        "\r\n"
+fn find_header_end(bytes: &[u8]) -> Option<usize> {
+    bytes.windows(4).position(|window| window == b"\r\n\r\n").map(|index| index + 4)
+}
+
+fn http_post_json(path: &str, value: &Value) -> Result<Value, String> {
+    let address = format!("127.0.0.1:{PORT}").parse().map_err(|e: std::net::AddrParseError| e.to_string())?;
+    let mut stream = TcpStream::connect_timeout(&address, Duration::from_millis(900))
+        .map_err(|_| "TuneCord uygulaması bulunamadı.".to_string())?;
+    stream.set_read_timeout(Some(Duration::from_secs(3))).map_err(|e| e.to_string())?;
+    stream.set_write_timeout(Some(Duration::from_secs(3))).map_err(|e| e.to_string())?;
+    let _ = stream.set_nodelay(true);
+
+    let payload = serde_json::to_vec(value).map_err(|e| e.to_string())?;
+    let header = format!(
+        "POST {path} HTTP/1.1\r\nHost: 127.0.0.1:{PORT}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        payload.len()
     );
-    stream.write_all(request.as_bytes()).map_err(|e| e.to_string())?;
+    stream.write_all(header.as_bytes()).map_err(|e| e.to_string())?;
+    stream.write_all(&payload).map_err(|e| e.to_string())?;
     stream.flush().map_err(|e| e.to_string())?;
 
-    let mut header = Vec::with_capacity(512);
-    let mut one = [0u8; 1];
-    while header.len() < 32 * 1024 {
-        stream.read_exact(&mut one).map_err(|e| e.to_string())?;
-        header.push(one[0]);
-        if header.ends_with(b"\r\n\r\n") { break; }
-    }
-    let text = String::from_utf8_lossy(&header);
-    if !text.starts_with("HTTP/1.1 101") {
-        return Err(format!("TuneCord WebSocket handshake reddedildi: {}", text.lines().next().unwrap_or("yanıt yok")));
-    }
-    Ok(())
-}
-
-fn mask_key() -> [u8; 4] {
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos();
-    let mixed = (now as u64) ^ ((process::id() as u64) << 17);
-    [mixed as u8, (mixed >> 8) as u8, (mixed >> 16) as u8, (mixed >> 24) as u8]
-}
-
-fn send_ws_frame(stream: &mut TcpStream, opcode: u8, payload: &[u8]) -> io::Result<()> {
-    let mask = mask_key();
-    let mut frame = Vec::with_capacity(payload.len() + 14);
-    frame.push(0x80 | (opcode & 0x0f));
-    if payload.len() < 126 {
-        frame.push(0x80 | payload.len() as u8);
-    } else if payload.len() <= u16::MAX as usize {
-        frame.push(0x80 | 126);
-        frame.extend_from_slice(&(payload.len() as u16).to_be_bytes());
-    } else {
-        frame.push(0x80 | 127);
-        frame.extend_from_slice(&(payload.len() as u64).to_be_bytes());
-    }
-    frame.extend_from_slice(&mask);
-    for (index, byte) in payload.iter().enumerate() {
-        frame.push(*byte ^ mask[index % 4]);
-    }
-    stream.write_all(&frame)?;
-    stream.flush()
-}
-
-fn send_ws_json(stream: &mut TcpStream, value: &Value) -> io::Result<()> {
-    let text = value.to_string();
-    send_ws_frame(stream, 0x1, text.as_bytes())
-}
-
-fn read_ws_json(stream: &mut TcpStream) -> Result<Option<Value>, String> {
+    let mut response = Vec::with_capacity(4096);
+    let mut chunk = [0u8; 4096];
     loop {
-        let mut head = [0u8; 2];
-        stream.read_exact(&mut head).map_err(|e| e.to_string())?;
-        let opcode = head[0] & 0x0f;
-        let masked = head[1] & 0x80 != 0;
-        let mut len = (head[1] & 0x7f) as u64;
-        if len == 126 {
-            let mut buf = [0u8; 2];
-            stream.read_exact(&mut buf).map_err(|e| e.to_string())?;
-            len = u16::from_be_bytes(buf) as u64;
-        } else if len == 127 {
-            let mut buf = [0u8; 8];
-            stream.read_exact(&mut buf).map_err(|e| e.to_string())?;
-            len = u64::from_be_bytes(buf);
+        match stream.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(read) => response.extend_from_slice(&chunk[..read]),
+            Err(error) if error.kind() == io::ErrorKind::ConnectionReset && !response.is_empty() => break,
+            Err(error) => return Err(error.to_string()),
         }
-        if len > 4 * 1024 * 1024 { return Err("TuneCord WebSocket frame çok büyük.".into()); }
-        let mut mask = [0u8; 4];
-        if masked { stream.read_exact(&mut mask).map_err(|e| e.to_string())?; }
-        let mut data = vec![0u8; len as usize];
-        stream.read_exact(&mut data).map_err(|e| e.to_string())?;
-        if masked {
-            for (index, byte) in data.iter_mut().enumerate() { *byte ^= mask[index % 4]; }
-        }
-        match opcode {
-            0x1 => {
-                let value = serde_json::from_slice(&data).map_err(|e| e.to_string())?;
-                return Ok(Some(value));
-            }
-            0x8 => return Ok(None),
-            0x9 => { send_ws_frame(stream, 0xA, &data).map_err(|e| e.to_string())?; }
-            _ => {}
+        if response.len() > 8 * 1024 * 1024 {
+            return Err("TuneCord yerel servis yanıtı çok büyük.".into());
         }
     }
+
+    let header_end = find_header_end(&response).ok_or_else(|| "TuneCord yerel servisinden geçersiz HTTP yanıtı geldi.".to_string())?;
+    let header_text = String::from_utf8_lossy(&response[..header_end]);
+    let status_ok = header_text.lines().next().map(|line| line.contains(" 200 ")).unwrap_or(false);
+    let content_length = header_text
+        .lines()
+        .find_map(|line| line.split_once(':').filter(|(key, _)| key.eq_ignore_ascii_case("content-length")))
+        .and_then(|(_, value)| value.trim().parse::<usize>().ok());
+    let body = &response[header_end..];
+    if let Some(expected) = content_length {
+        if body.len() < expected {
+            return Err("TuneCord yerel servis yanıtı yarıda kesildi.".into());
+        }
+    }
+    let parsed = serde_json::from_slice::<Value>(body).map_err(|e| format!("TuneCord yerel servis JSON hatası: {e}"))?;
+    if !status_ok {
+        return Err(parsed.get("error").and_then(Value::as_str).unwrap_or("TuneCord yerel servis isteği başarısız.").to_string());
+    }
+    Ok(parsed)
 }
 
-fn connect_backend(origin: &str) -> Result<TcpStream, String> {
-    let mut stream = TcpStream::connect_timeout(
-        &format!("127.0.0.1:{PORT}").parse().map_err(|e: std::net::AddrParseError| e.to_string())?,
-        Duration::from_millis(900),
-    ).map_err(|_| "TuneCord uygulaması bulunamadı.".to_string())?;
-    stream.set_read_timeout(Some(Duration::from_secs(5))).map_err(|e| e.to_string())?;
-    stream.set_write_timeout(Some(Duration::from_secs(5))).map_err(|e| e.to_string())?;
-    websocket_handshake(&mut stream)?;
+fn decorate_message(message: &Value, caller: &Caller, token: &str) -> Result<Value, String> {
+    let mut object: Map<String, Value> = message.as_object().cloned().ok_or_else(|| "Native Messaging isteği JSON nesnesi değil.".to_string())?;
+    object.insert("extensionId".into(), Value::String(caller.extension_id.clone()));
+    object.insert("browserFamily".into(), Value::String(caller.family.to_string()));
+    object.insert("token".into(), Value::String(token.to_string()));
+    Ok(Value::Object(object))
+}
 
-    let hello_id = format!("native-hello-{}", process::id());
+fn request_backend(message: &Value, caller: &Caller) -> Result<Value, String> {
     let mut token = bridge_token();
-    let extension_id = caller_extension_id(origin);
-    let family = browser_family(origin);
+    let mut last_error = "TuneCord yerel köprüsüne bağlanılamadı.".to_string();
 
-    for _ in 0..2 {
-        send_ws_json(&mut stream, &json!({
-            "id": hello_id,
-            "type": "hello",
-            "token": token,
-            "extensionId": extension_id,
-            "browserFamily": family
-        })).map_err(|e| e.to_string())?;
-
-        loop {
-            let Some(reply) = read_ws_json(&mut stream)? else { return Err("TuneCord bağlantıyı kapattı.".into()); };
-            if reply.get("id").and_then(Value::as_str) != Some(&hello_id) { continue; }
-            if reply.get("ok").and_then(Value::as_bool) == Some(true) { return Ok(stream); }
-            if reply.get("code").and_then(Value::as_str) == Some("PAIR_REQUIRED") {
-                if let Some(next) = reply.get("token").and_then(Value::as_str) {
-                    token = next.to_string();
-                    break;
+    for _ in 0..3 {
+        let request = decorate_message(message, caller, &token)?;
+        match http_post_json("/api/native", &request) {
+            Ok(reply) => {
+                if reply.get("code").and_then(Value::as_str) == Some("PAIR_REQUIRED") {
+                    if let Some(next) = reply.get("token").and_then(Value::as_str) {
+                        token = next.to_string();
+                        continue;
+                    }
                 }
+                return Ok(reply);
             }
-            return Err(reply.get("error").and_then(Value::as_str).unwrap_or("TuneCord eşleşmesi başarısız.").to_string());
+            Err(error) => {
+                last_error = error;
+                std::thread::sleep(Duration::from_millis(60));
+            }
         }
     }
-    Err("TuneCord eşleşmesi tamamlanamadı.".into())
-}
-
-fn backend_roundtrip(stream: &mut TcpStream, message: &Value, id: &Value) -> Result<Vec<Value>, String> {
-    send_ws_json(stream, message).map_err(|e| e.to_string())?;
-    let mut replies = Vec::new();
-    loop {
-        let Some(reply) = read_ws_json(stream)? else { return Err("TuneCord bağlantıyı kapattı.".into()); };
-        let is_response = reply.get("id") == Some(id) && !id.is_null();
-        replies.push(reply);
-        if is_response { return Ok(replies); }
-    }
+    Err(last_error)
 }
 
 fn error_reply(id: Value, message: impl Into<String>) -> Value {
@@ -225,11 +176,9 @@ fn error_reply(id: Value, message: impl Into<String>) -> Value {
 }
 
 fn main() {
-    let origin = caller_origin();
+    let caller = caller();
     let mut input = io::stdin().lock();
     let mut output = io::stdout().lock();
-    let mut backend: Option<TcpStream> = None;
-    let mut last_backend_use: Option<Instant> = None;
 
     loop {
         let message = match read_native_message(&mut input) {
@@ -241,47 +190,12 @@ fn main() {
             }
         };
         let id = message.get("id").cloned().unwrap_or(Value::Null);
-
-        if last_backend_use.map(|t| t.elapsed() >= BACKEND_STALE_AFTER).unwrap_or(false) {
-            backend = None;
-            last_backend_use = None;
-        }
-
-        let mut replies: Option<Vec<Value>> = None;
-        let mut last_error = "TuneCord yerel köprüsüne bağlanılamadı.".to_string();
-
-        for _ in 0..2 {
-            if backend.is_none() {
-                match connect_backend(&origin) {
-                    Ok(stream) => backend = Some(stream),
-                    Err(error) => {
-                        last_error = error;
-                        continue;
-                    }
-                }
-            }
-
-            let result = backend_roundtrip(backend.as_mut().unwrap(), &message, &id);
-            match result {
-                Ok(value) => {
-                    replies = Some(value);
-                    last_backend_use = Some(Instant::now());
-                    break;
-                }
-                Err(error) => {
-                    last_error = error;
-                    backend = None;
-                    last_backend_use = None;
-                }
-            }
-        }
-
-        if let Some(values) = replies {
-            for reply in values {
-                if write_native_message(&mut output, &reply).is_err() { return; }
-            }
-        } else if write_native_message(&mut output, &error_reply(id, last_error)).is_err() {
-            return;
+        let reply = match request_backend(&message, &caller) {
+            Ok(value) => value,
+            Err(error) => error_reply(id, error),
+        };
+        if write_native_message(&mut output, &reply).is_err() {
+            break;
         }
     }
 }
