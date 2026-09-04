@@ -7,27 +7,35 @@
   <link rel="stylesheet" href="ui.css">
 </head>
 <body class="popup">
-  <header>
-    <div class="logo">R</div>
-    <div><h1>TuneCord</h1><p id="bridgeState">Uygulama aranıyor…</p></div>
+  <header class="popup-header">
+    <div>
+      <span class="eyebrow">TUNECORD</span>
+      <h1>Presence</h1>
+    </div>
+    <span id="bridgeState" class="pill">Uygulama aranıyor…</span>
   </header>
 
   <main>
     <section class="card now">
-      <span class="eyebrow">ŞU AN</span>
-      <strong id="trackTitle">Bir şey çalmıyor</strong>
-      <span id="trackArtist">YouTube'u açıp bir şarkı başlat.</span>
+      <div class="now-icon">♪</div>
+      <div class="now-text">
+        <span class="eyebrow">ŞU AN</span>
+        <strong id="trackTitle">Bir şey çalmıyor</strong>
+        <span id="trackArtist">YouTube'u açıp bir şarkı başlat.</span>
+      </div>
     </section>
 
-    <label class="row toggle-row">
-      <span><b>Discord'da göster</b><small>Rich Presence'i anında kapat/aç</small></span>
+    <label class="toggle-row standalone">
+      <span><b>Discord'da göster</b><small>Rich Presence'i anında aç veya kapat.</small></span>
       <input id="enabled" type="checkbox"><i class="switch"></i>
     </label>
 
     <section class="card compact">
-      <span class="label">GÖRÜNÜRLÜK</span>
-      <label><input type="radio" name="mode" value="all"> Tüm şarkılar</label>
-      <label><input type="radio" name="mode" value="selected"> Yalnızca seçili playlistler</label>
+      <span class="eyebrow">GÖRÜNÜRLÜK</span>
+      <div class="segmented vertical">
+        <label><input type="radio" name="mode" value="all"><span>Tüm şarkılar</span></label>
+        <label><input type="radio" name="mode" value="selected"><span>Seçili playlistler</span></label>
+      </div>
     </section>
 
     <div class="actions">

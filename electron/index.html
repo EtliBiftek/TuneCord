@@ -4,47 +4,173 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>TuneCord</title>
-  <link rel="stylesheet" href="../extension/ui.css">
   <link rel="stylesheet" href="desktop.css">
 </head>
 <body class="desktop">
-  <div class="titlebar">
-    <div class="brand"><div class="logo">T</div><span>TuneCord</span></div>
-  </div>
-  <main class="settings-shell">
+  <div class="titlebar" aria-hidden="true"></div>
+
+  <section id="setupWizard" class="setup-overlay" hidden>
+    <div class="setup-shell">
+      <div class="setup-topline">
+        <span class="setup-kicker">TUNECORD KURULUMU</span>
+        <div class="setup-progress" aria-label="Kurulum adımları">
+          <i data-step-dot="1" class="active"></i>
+          <i data-step-dot="2"></i>
+          <i data-step-dot="3"></i>
+        </div>
+      </div>
+
+      <div id="setupStep1" class="setup-step">
+        <div class="setup-copy">
+          <span class="eyebrow">01 · TARAYICI</span>
+          <h1>Hangi tarayıcıda dinliyorsun?</h1>
+          <p>TuneCord bilgisayarındaki Chromium tabanlı tarayıcıları tarar. Eklentiyi kuracağımız tarayıcıyı seç.</p>
+        </div>
+        <div id="browserList" class="browser-list">
+          <div class="scan-placeholder"><span class="spinner"></span> Tarayıcılar aranıyor…</div>
+        </div>
+        <div class="setup-actions">
+          <button id="rescanBrowsers" class="ghost">Yeniden tara</button>
+          <button id="browserNext" class="primary" disabled>Devam et</button>
+        </div>
+      </div>
+
+      <div id="setupStep2" class="setup-step" hidden>
+        <div class="setup-copy">
+          <span class="eyebrow">02 · EKLENTİ</span>
+          <h1>Eklentiyi kuralım mı?</h1>
+          <p id="installDescription">TuneCord, YouTube ve YouTube Music'te çalan parçayı görebilmek için tarayıcı eklentisine ihtiyaç duyar.</p>
+        </div>
+        <div class="permission-card">
+          <div class="permission-icon">↗</div>
+          <div>
+            <b>Eklenti gerekli</b>
+            <p>Eklenti olmadan TuneCord tarayıcıdaki şarkıyı algılayamaz ve Discord Presence gönderemez.</p>
+          </div>
+        </div>
+        <div class="permission-card soft">
+          <div class="permission-icon">✓</div>
+          <div>
+            <b>Kur dersen otomatik hazırlayacağız</b>
+            <p>Eklenti yerel TuneCord klasörüne kopyalanır ve seçtiğin tarayıcı eklenti yüklenmiş şekilde açılır. Tarayıcı güvenlik politikası ayrıca onay isterse yalnızca o onayı tamamlaman gerekir.</p>
+          </div>
+        </div>
+        <p id="installMessage" class="setup-message"></p>
+        <div class="setup-actions three">
+          <button id="setupBack" class="ghost">Geri</button>
+          <button id="skipSetup" class="secondary">Eklentisiz devam et</button>
+          <button id="installExtension" class="primary">Eklentiyi kur</button>
+        </div>
+      </div>
+
+      <div id="setupStep3" class="setup-step success-step" hidden>
+        <div class="success-mark">✓</div>
+        <span class="eyebrow">03 · HAZIR</span>
+        <h1>Kurulum tamamlandı.</h1>
+        <p id="successText">Tarayıcı eklentiyle açıldı. YouTube'da bir şarkı başlattığında TuneCord otomatik algılayacak.</p>
+        <div class="setup-actions center">
+          <button id="finishSetup" class="primary large">TuneCord'u aç</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <main id="appShell" class="app-shell" hidden>
     <header class="app-header">
-      <div><span class="eyebrow">YOUTUBE MUSIC PRESENCE</span><h1>TuneCord</h1><p>YouTube ve YouTube Music’i Discord’da dinliyor olarak göster.</p></div>
-      <div id="connection" class="pill">Uygulama hazırlanıyor</div>
+      <div>
+        <span class="eyebrow">YOUTUBE → DISCORD</span>
+        <h1>Dinlediğin şey, Discord'da.</h1>
+        <p>YouTube ve YouTube Music için hızlı, yerel Rich Presence köprüsü.</p>
+      </div>
+      <div id="connection" class="status-pill">Hazırlanıyor</div>
     </header>
 
-    <section class="hero card">
-      <div class="now"><span class="eyebrow">ŞU AN ÇALIYOR</span><strong id="trackTitle">Bir şey çalmıyor</strong><span id="trackArtist">YouTube veya YouTube Music’te bir parça başlat.</span></div>
-      <div class="hero-status"><span id="extensionDot" class="status-dot"></span><span id="extensionState">Eklenti bekleniyor</span><span class="divider"></span><span id="discordDot" class="status-dot"></span><span id="discordState">Discord bekleniyor</span></div>
+    <section class="now-card">
+      <div class="now-art">
+        <span class="music-note">♪</span>
+      </div>
+      <div class="now-copy">
+        <span class="eyebrow">ŞU AN ÇALIYOR</span>
+        <strong id="trackTitle">Bir şey çalmıyor</strong>
+        <span id="trackArtist">YouTube veya YouTube Music'te bir parça başlat.</span>
+      </div>
+      <div class="now-statuses">
+        <div><span id="extensionDot" class="status-dot"></span><span id="extensionState">Eklenti bekleniyor</span></div>
+        <div><span id="discordDot" class="status-dot"></span><span id="discordState">Discord bekleniyor</span></div>
+      </div>
     </section>
 
-    <div class="settings-grid">
-      <section class="card panel">
-        <span class="label">GENEL</span>
-        <label class="row toggle-row"><span><b>Discord’da göster</b><small>Rich Presence’i anında aç veya kapat</small></span><input id="enabled" type="checkbox"><i class="switch"></i></label>
-        <label class="row toggle-row"><span><b>Açılışta tray’de başlat</b><small>Windows açılınca arka planda hazır olur</small></span><input id="startup" type="checkbox"><i class="switch"></i></label>
-        <label class="field">DISCORD APPLICATION ID<input id="discordId" inputmode="numeric" maxlength="22" placeholder="123456789012345678"></label>
-        <div class="actions"><button id="reset" class="secondary">Eşleşmeyi sıfırla</button><button id="save" class="primary">Kaydet</button></div>
-        <p id="message" class="good"></p>
+    <div class="dashboard-grid">
+      <section class="surface general-panel">
+        <div class="section-head">
+          <div><span class="eyebrow">GENEL</span><h2>Presence</h2></div>
+        </div>
+
+        <label class="setting-row">
+          <span><b>Discord'da göster</b><small>Rich Presence'i anında aç veya kapat.</small></span>
+          <input id="enabled" type="checkbox"><i class="switch"></i>
+        </label>
+        <label class="setting-row">
+          <span><b>Windows ile başlat</b><small>Uygulama açılışta doğrudan tray'e geçer.</small></span>
+          <input id="startup" type="checkbox"><i class="switch"></i>
+        </label>
+
+        <label class="field">
+          <span>DISCORD APPLICATION ID</span>
+          <input id="discordId" inputmode="numeric" maxlength="22" placeholder="123456789012345678">
+        </label>
+
+        <div class="button-row">
+          <button id="reset" class="ghost">Eşleşmeyi sıfırla</button>
+          <button id="save" class="primary">Kaydet</button>
+        </div>
+        <p id="message" class="form-message"></p>
+        <p id="discordError" class="form-message bad"></p>
       </section>
 
-      <section class="card panel">
-        <span class="label">GÖRÜNÜRLÜK</span>
-        <h2>Playlist filtresi</h2><p>İstersen yalnızca seçtiğin playlistlerde Presence gönder.</p>
-        <div class="mode-row"><label><input type="radio" name="mode" value="all"> Tüm şarkılar</label><label><input type="radio" name="mode" value="selected"> Seçili playlistler</label></div>
-        <div class="playlist-tools"><span id="playlistCount">0 playlist</span><span>Eklenti ayarlarından yenileyebilirsin.</span></div>
+      <section class="surface browser-panel">
+        <div class="section-head">
+          <div><span class="eyebrow">TARAYICI</span><h2>Entegrasyon</h2></div>
+          <span id="browserBadge" class="mini-pill">Seçilmedi</span>
+        </div>
+        <div class="browser-summary">
+          <span class="browser-orb"></span>
+          <div><b id="browserName">Tarayıcı seçilmedi</b><small id="browserPath">Kurulum sihirbazını çalıştır.</small></div>
+        </div>
+        <div class="browser-health">
+          <div><span>Kurulum</span><b id="installState">Bekliyor</b></div>
+          <div><span>Canlı bağlantı</span><b id="liveExtensionState">Yok</b></div>
+        </div>
+        <div class="button-row stack-mobile">
+          <button id="openBrowser" class="secondary">Tarayıcıyı eklentiyle aç</button>
+          <button id="rerunSetup" class="ghost">Kurulumu yeniden aç</button>
+        </div>
+      </section>
+
+      <section class="surface visibility-panel">
+        <div class="section-head">
+          <div><span class="eyebrow">GÖRÜNÜRLÜK</span><h2>Ne gösterilsin?</h2></div>
+          <span id="playlistCount" class="mini-pill">0 playlist</span>
+        </div>
+        <p class="muted-copy">Her şarkıyı gösterebilir veya yalnızca seçtiğin playlistlerle sınırlandırabilirsin.</p>
+        <div class="segmented">
+          <label><input type="radio" name="mode" value="all"><span>Tüm şarkılar</span></label>
+          <label><input type="radio" name="mode" value="selected"><span>Seçili playlistler</span></label>
+        </div>
       </section>
     </div>
 
-    <section class="card panel playlists-panel">
-      <div class="playlist-head"><div><span class="label">PLAYLISTLER</span><h2>Dinlerken gösterilecekleri seç</h2></div><input id="search" class="search" placeholder="Playlist ara"></div>
-      <div id="playlistList" class="playlist-list"><p class="empty">Playlistler eklentiden geldiğinde burada görünür.</p></div>
+    <section class="surface playlists-panel">
+      <div class="playlist-head">
+        <div><span class="eyebrow">PLAYLISTLER</span><h2>Discord'da görünecekler</h2></div>
+        <input id="search" class="search" placeholder="Playlist ara…">
+      </div>
+      <div id="playlistList" class="playlist-list">
+        <p class="empty">Playlistler eklentiden geldiğinde burada görünür.</p>
+      </div>
     </section>
   </main>
+
   <script src="renderer.js"></script>
 </body>
 </html>

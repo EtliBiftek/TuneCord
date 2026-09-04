@@ -19,29 +19,24 @@ jobs:
         with:
           node-version: 22
           cache: npm
+
       - name: Build Electron app
         run: |
           npm ci
           npm run dist
-      - name: Prepare package
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force package\app, package\extension, package\tools | Out-Null
-          Copy-Item dist\TuneCord.exe package\app\TuneCord.exe
-          Copy-Item extension\* package\extension\ -Recurse
-          Copy-Item tools\* package\tools\ -Recurse
-          Copy-Item README.md, LICENSE, Build.ps1, install.ps1, uninstall.ps1 package\
-          Compress-Archive -Path package\* -DestinationPath TuneCord-Windows-x64.zip -Force
-      - uses: actions/upload-artifact@v4
+
+      - name: Upload executable
+        uses: actions/upload-artifact@v4
         with:
-          name: TuneCord-Windows-x64
-          path: TuneCord-Windows-x64.zip
+          name: TuneCord.exe
+          path: dist/TuneCord.exe
+
       - name: Publish GitHub release
         if: github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.0.2
+          tag_name: v1.1.0
           target_commitish: ${{ github.sha }}
-          name: TuneCord v1.0.2
+          name: TuneCord v1.1.0
           generate_release_notes: true
-          files: TuneCord-Windows-x64.zip
+          files: dist/TuneCord.exe

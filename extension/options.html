@@ -8,34 +8,42 @@
 </head>
 <body class="options">
   <main class="settings-shell">
-    <header>
-      <div class="logo">R</div>
-      <div><h1>TuneCord</h1><p>YouTube → Discord Presence</p></div>
+    <header class="options-header">
+      <div>
+        <span class="eyebrow">TUNECORD EXTENSION</span>
+        <h1>Ayarlar</h1>
+        <p>YouTube oturumunu, Presence görünürlüğünü ve playlist filtresini buradan yönet.</p>
+      </div>
       <span id="appState" class="pill">Bağlanıyor</span>
     </header>
 
     <section class="settings-grid">
       <div class="card panel">
-        <span class="eyebrow">DISCORD</span>
-        <h2>Rich Presence</h2>
-        <p>Discord Developer Portal'da oluşturduğun uygulamanın Application ID'sini gir.</p>
+        <div class="section-head">
+          <div><span class="eyebrow">DISCORD</span><h2>Rich Presence</h2></div>
+          <span class="mini-pill">LOCAL RPC</span>
+        </div>
+        <p>Discord Developer Portal'daki uygulamanın Application ID'sini kullan.</p>
         <label class="field">Application ID
           <input id="discordAppId" inputmode="numeric" placeholder="123456789012345678">
         </label>
-        <label class="row toggle-row inset">
+        <label class="toggle-row inset">
           <span><b>Discord'da göster</b><small>Şarkı bilgisini yayınla</small></span>
           <input id="enabled" type="checkbox"><i class="switch"></i>
         </label>
       </div>
 
       <div class="card panel">
-        <span class="eyebrow">YOUTUBE HESABI</span>
-        <h2>Playlistleri getir</h2>
-        <p>Önce açık YouTube oturumundan getir. Tam API listesi gerekirse Google OAuth kullanabilirsin.</p>
-        <button id="sessionSync" class="primary wide">YouTube oturumundan getir</button>
-        <button id="sync" class="secondary wide">Google OAuth ile getir</button>
-        <button id="signOut" class="text-button">Google bağlantısını kaldır</button>
-        <small id="googleState">Henüz playlist alınmadı</small>
+        <div class="section-head">
+          <div><span class="eyebrow">YOUTUBE</span><h2>Playlistleri yenile</h2></div>
+          <span class="mini-pill">OAUTH YOK</span>
+        </div>
+        <p>Tarayıcıda açık olan YouTube oturumunu kullanır. Google OAuth veya API anahtarı istemez.</p>
+        <button id="sessionSync" class="primary wide">YouTube oturumundan yenile</button>
+        <div class="sync-state">
+          <span class="sync-dot"></span>
+          <small id="sessionState">Henüz playlist alınmadı</small>
+        </div>
       </div>
     </section>
 
@@ -44,9 +52,9 @@
         <div><span class="eyebrow">FİLTRE</span><h2>Discord'da görünecek playlistler</h2></div>
         <input id="search" class="search" placeholder="Playlist ara…">
       </div>
-      <div class="mode-row">
-        <label><input type="radio" name="mode" value="all"> Tüm şarkılar</label>
-        <label><input type="radio" name="mode" value="selected"> Yalnızca seçtiklerim</label>
+      <div class="segmented">
+        <label><input type="radio" name="mode" value="all"><span>Tüm şarkılar</span></label>
+        <label><input type="radio" name="mode" value="selected"><span>Yalnızca seçtiklerim</span></label>
       </div>
       <div id="playlists" class="playlist-list"><p class="empty">Playlist listesi boş.</p></div>
     </section>

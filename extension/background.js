@@ -33,7 +33,7 @@ async function bridgeFetch(path, options = {}, retry = true) {
     return response.json();
   } catch (error) {
     await chrome.action.setBadgeText({ text: "!" });
-    await chrome.action.setBadgeBackgroundColor({ color: "#ef4444" });
+    await chrome.action.setBadgeBackgroundColor({ color: "#d92d69" });
     throw error;
   }
 }
@@ -47,76 +47,19 @@ async function sendTrack(track, tabId) {
       body: JSON.stringify(track)
     });
     await chrome.action.setBadgeText({ text: "ON" });
-    await chrome.action.setBadgeBackgroundColor({ color: "#22c55e" });
-  } else {
-    if (currentTabId === null) {
-      const session = await chrome.storage.session.get("currentTabId");
-      currentTabId = session.currentTabId ?? null;
-    }
-    if (currentTabId !== tabId) return;
-    currentTabId = null;
-    await chrome.storage.session.remove("currentTabId");
-    await bridgeFetch("/api/stop", { method: "POST", body: "{}" });
-    await chrome.action.setBadgeText({ text: "" });
-  }
-}
-
-function getOAuthToken(interactive) {
-  return new Promise((resolve, reject) => {
-    chrome.identity.getAuthToken({ interactive }, (result) => {
-      const error = chrome.runtime.lastError;
-      if (error) return reject(new Error(error.message));
-      const token = typeof result === "string" ? result : result?.token;
-      if (!token) return reject(new Error("Google erişim anahtarı alınamadı."));
-      resolve(token);
-    });
-  });
-}
-
-async function fetchPlaylists(interactive = true) {
-  const manifestClientId = chrome.runtime.getManifest().oauth2?.client_id || "";
-  if (manifestClientId.startsWith("REPLACE_WITH_")) {
-    throw new Error("Önce manifest.json içindeki Google OAuth Client ID alanını ayarla.");
+    await chrome.action.setBadgeBackgroundColor({ color: "#32c67a" });
+    return;
   }
 
-  let token = await getOAuthToken(interactive);
-  const items = [];
-  let pageToken = "";
-
-  do {
-    const url = new URL("https://www.googleapis.com/youtube/v3/playlists");
-    url.searchParams.set("part", "snippet");
-    url.searchParams.set("mine", "true");
-    url.searchParams.set("maxResults", "50");
-    if (pageToken) url.searchParams.set("pageToken", pageToken);
-
-    let response = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
-    if (response.status === 401) {
-      await chrome.identity.removeCachedAuthToken({ token });
-      token = await getOAuthToken(interactive);
-      response = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
-    }
-    if (!response.ok) {
-      const detail = await response.text();
-      throw new Error(`YouTube API ${response.status}: ${detail.slice(0, 180)}`);
-    }
-
-    const data = await response.json();
-    for (const playlist of data.items || []) {
-      items.push({
-        id: playlist.id,
-        title: playlist.snippet?.title || playlist.id
-      });
-    }
-    pageToken = data.nextPageToken || "";
-  } while (pageToken);
-
-  await bridgeFetch("/api/playlists", {
-    method: "POST",
-    body: JSON.stringify({ items })
-  });
-  await chrome.storage.local.set({ googleConnected: true, lastPlaylistSync: Date.now() });
-  return items;
+  if (currentTabId === null) {
+    const session = await chrome.storage.session.get("currentTabId");
+    currentTabId = session.currentTabId ?? null;
+  }
+  if (currentTabId !== tabId) return;
+  currentTabId = null;
+  await chrome.storage.session.remove("currentTabId");
+  await bridgeFetch("/api/stop", { method: "POST", body: "{}" });
+  await chrome.action.setBadgeText({ text: "" });
 }
 
 function extractAssignedJson(html) {
@@ -154,14 +97,14 @@ function rendererText(value) {
   if (typeof value === "string") return value;
   if (typeof value.simpleText === "string") return value.simpleText;
   if (typeof value.content === "string") return value.content;
-  if (Array.isArray(value.runs)) return value.runs.map((run) => run.text || "").join("");
+  if (Array.isArray(value.runs)) return value.runs.map(run => run.text || "").join("");
   return "";
 }
 
 function collectSessionPlaylists(root) {
   const found = new Map();
   const seen = new Set();
-  const visit = (node) => {
+  const visit = node => {
     if (!node || typeof node !== "object" || seen.has(node)) return;
     seen.add(node);
 
@@ -195,18 +138,13 @@ async function fetchPlaylistsFromSession() {
   if (!response.ok) throw new Error(`YouTube ${response.status} hatası verdi.`);
   const items = collectSessionPlaylists(extractAssignedJson(await response.text()));
   if (!items.length) throw new Error("Playlist bulunamadı. YouTube hesabına giriş yapıp tekrar dene.");
+
   await bridgeFetch("/api/playlists", {
     method: "POST",
     body: JSON.stringify({ items })
   });
   await chrome.storage.local.set({ sessionConnected: true, lastPlaylistSync: Date.now() });
   return items;
-}
-
-async function signOutGoogle() {
-  await chrome.identity.clearAllCachedAuthTokens();
-  await chrome.storage.local.set({ googleConnected: false });
-  return { ok: true };
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -225,24 +163,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       case "pair":
         await pairBridge(true);
         return bridgeFetch("/api/status");
-      case "syncPlaylists":
-        return { ok: true, items: await fetchPlaylists(true) };
       case "syncSessionPlaylists":
         return { ok: true, items: await fetchPlaylistsFromSession() };
-      case "googleState": {
-        const state = await chrome.storage.local.get(["googleConnected", "sessionConnected", "lastPlaylistSync"]);
-        return { ...state, extensionId: chrome.runtime.id };
+      case "playlistState": {
+        const local = await chrome.storage.local.get(["sessionConnected", "lastPlaylistSync"]);
+        return { ...local, extensionId: chrome.runtime.id };
       }
-      case "googleSignOut":
-        return signOutGoogle();
       default:
         throw new Error("Bilinmeyen istek.");
     }
-  })().then(sendResponse).catch((error) => sendResponse({ ok: false, error: error.message }));
+  })().then(sendResponse).catch(error => sendResponse({ ok: false, error: error.message }));
   return true;
 });
 
-chrome.tabs.onRemoved.addListener(async (tabId) => {
+chrome.tabs.onRemoved.addListener(async tabId => {
   if (currentTabId === null) {
     const session = await chrome.storage.session.get("currentTabId");
     currentTabId = session.currentTabId ?? null;
@@ -262,6 +196,6 @@ chrome.runtime.onInstalled.addListener(async ({ reason }) => {
   try {
     await pairBridge(true);
   } catch (_) {
-    // Uygulama daha sonra açıldığında popup otomatik yeniden eşleşir.
+    // Uygulama daha sonra açıldığında popup yeniden eşleşir.
   }
 });

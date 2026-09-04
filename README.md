@@ -1,87 +1,46 @@
 # TuneCord
 
-TuneCord, YouTube ve YouTube Music'te çalan parçayı yerel Electron uygulamasına aktarır ve Discord'da **Listening / Dinliyor** Rich Presence olarak gösterir. Uygulama, extension ile aynı koyu pembe tema ve Windows tray deneyimini kullanır.
+TuneCord, YouTube ve YouTube Music'te çalan parçayı yerel Electron uygulamasına aktarır ve Discord'da **Listening / Dinliyor** Rich Presence olarak gösterir.
 
-## Özellikler
+## Kurulum
 
-- YouTube ve YouTube Music için başlık, sanatçı, süre, oynatma durumu ve playlist algılama
-- Discord Presence'i uygulamadan, tray menüsünden veya eklenti popup'ından kapatma/açma
-- Tüm şarkıları ya da yalnızca seçilen playlistleri gösterme
-- Google hesabından playlistleri salt okunur YouTube Data API izniyle getirme
-- Windows açılışında otomatik ve doğrudan tray'de başlama
-- Extension ile eşleşen modern Electron masaüstü arayüzü
-- Yalnızca `127.0.0.1:37645` üzerinde dinleyen, rastgele anahtarlı local bridge
+GitHub Releases bölümünden yalnızca `TuneCord.exe` dosyasını indirip çalıştır.
 
-## 1. Windows uygulamasını kur
+İlk açılışta TuneCord kurulum sihirbazı:
 
-Hazır GitHub Actions paketinde PowerShell açıp şunu çalıştır:
+1. Bilgisayardaki Chromium tabanlı tarayıcıları (Brave, Chrome, Edge, Vivaldi, Opera/Opera GX, Chromium) tarar.
+2. Kullanacağın tarayıcıyı seçmeni ister.
+3. TuneCord eklentisinin gerekli olduğunu açıkça belirtir ve kurulum için onay ister.
+4. Onay verirsen eklentiyi yerel TuneCord klasörüne hazırlar ve seçtiğin tarayıcıyı eklenti yüklenmiş şekilde açar.
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\install.ps1
-```
+Chromium güvenlik politikaları bazı tarayıcı sürümlerinde ilk yüklemede ek bir tarayıcı onayı gösterebilir. TuneCord bunun dışındaki dosya hazırlama ve başlatma adımlarını otomatik yapar.
 
-Kaynak koddan derlemek için Node.js 22+ kuruluysa `Build.ps1` çalıştır. Çıktı `dist\TuneCord.exe` olur.
+## Google OAuth yok
 
-## 2. Discord Application ID oluştur
+TuneCord artık Google OAuth, Google API anahtarı veya `chrome.identity` kullanmaz. Playlistler, tarayıcıda zaten açık olan YouTube oturumunun `/feed/playlists` verisinden salt okunur şekilde alınır.
 
-1. [Discord Developer Portal](https://discord.com/developers/applications) üzerinden **New Application** de ve adını `TuneCord` yap.
-2. **General Information → Application ID** değerini kopyala.
-3. `TuneCord.exe` içindeki **Discord Application ID** alanına yapıştırıp **Kaydet** de.
-4. Discord masaüstü uygulamasının açık olduğundan emin ol. Tarayıcı Discord'u IPC sağlamaz.
+- Google token'ı alınmaz veya saklanmaz.
+- Şifre okunmaz.
+- İstenen tek web erişimi YouTube / YouTube Music ve yerel `127.0.0.1:37645` bridge'idir.
 
-Uygulama Discord IPC'ye `ActivityType.Listening` (`type: 2`) gönderir. Bazı Discord istemci sürümleri üçüncü taraf custom activity türünün etiketini kendi arayüzünde farklı gösterebilir; parça ve sanatçı bilgisi yine Presence içinde kalır.
+## Discord ayarı
 
-## 3. Playlistleri getir
+1. Discord Developer Portal'da bir uygulama oluştur.
+2. **General Information → Application ID** değerini TuneCord'a gir.
+3. Discord masaüstü uygulamasını açık tut.
 
-En kolay yöntem eklenti ayarlarında **YouTube oturumundan getir** düğmesidir. Eklenti, tarayıcıda zaten açık olan YouTube hesabının `/feed/playlists` verisini okur; şifrene veya Google token'ına erişmez. Bu yöntem Chrome, Brave ve Edge gibi Chromium tarayıcılarında ek OAuth kurulumu istemez.
+TuneCord gerçek Discord IPC `READY` yanıtını bekler ve ardından `SET_ACTIVITY` gönderir. Web Discord, masaüstü IPC sağlamadığı için desteklenmez.
 
-YouTube sayfası biçimini değiştirirse veya hesabında çok fazla playlist varsa resmi API yöntemini kullanabilirsin:
+## Playlist filtresi
 
-### İsteğe bağlı: Google OAuth'u ayarla
+Eklenti ayarlarında **YouTube oturumundan yenile** düğmesi playlistlerini getirir. Ardından:
 
-Google, başka birinin adına gizlice OAuth kimliği dağıtmaya izin vermediği için kendi ücretsiz Client ID'ni oluşturmalısın. Şifre veya client secret gerekmez.
+- **Tüm şarkılar**: her aktif YouTube/YouTube Music parçasını gösterir.
+- **Seçili playlistler**: yalnızca URL'deki `list=` değeri seçtiğin playlistlerden biriyle eşleşirse Presence gönderir.
 
-Sabit extension ID:
+## Yerel çalışma ve gizlilik
 
-```text
-mfhiohlcbedfhemkommfailjjfkdfobe
-```
-
-1. [Google Cloud Console](https://console.cloud.google.com/) içinde bir proje oluştur.
-2. **APIs & Services → Library** bölümünden **YouTube Data API v3**'ü etkinleştir.
-3. **OAuth consent screen** oluştur. Uygulama Testing modundaysa kendi Google e-postanı test user olarak ekle.
-4. **Credentials → Create credentials → OAuth client ID → Chrome Extension** seç.
-5. Item ID alanına yukarıdaki extension ID'yi gir ve oluşturulan Client ID'yi kopyala.
-6. Proje ana klasöründe şu komutu çalıştır:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\tools\Configure-GoogleOAuth.ps1 -ClientId "BURAYA_CLIENT_ID.apps.googleusercontent.com"
-```
-
-7. Chromium'da `chrome://extensions` aç, Developer mode'u aç, **Load unpacked / Paketlenmemiş öğe yükle** deyip `extension` klasörünü seç.
-
-Chrome'un resmi Identity akışı için OAuth Client ID manifestte bulunmak zorundadır. İstenen tek kapsam `youtube.readonly`; TuneCord playlist ekleyemez, değiştiremez veya silemez.
-
-## 4. Kullanım
-
-1. Discord masaüstü uygulamasını ve `TuneCord.exe`yi aç.
-2. Eklentinin **Ayarlar** ekranında **YouTube oturumundan getir**e bas. Gerekirse resmi API için **Google OAuth ile getir**i kullan.
-3. **Tüm şarkılar** veya **Yalnızca seçtiklerim** modunu seç; gerekiyorsa playlistleri işaretle ve kaydet.
-4. YouTube ya da YouTube Music'te bir parça başlat.
-
-Playlist modu, adres çubuğundaki gerçek YouTube `list=` kimliğini karşılaştırır. Playlist dışından açılan tekil parçalar seçili-playlist modunda Discord'a gönderilmez.
-
-## Gizlilik ve kaynak kullanımı
-
-- Google access token'ı uygulamaya gitmez; Chromium'un `chrome.identity` token cache'inde kalır.
-- Uygulama yalnızca parça bilgisi, ayarlar ve playlist ad/ID listesini `%LOCALAPPDATA%\TuneCord\config.json` içinde tutar.
-- Bridge tüm ağ arayüzlerine değil yalnızca loopback'e bind olur. API çağrıları uygulamanın ürettiği eşleşme anahtarını ister.
-- Video/audio verisi okunmaz veya kaydedilmez.
-- Presence güncellemesi yalnızca parça değişince yapılır; boşta sürekli Discord mesajı göndermez.
-
-## Sorun giderme
-
-- **Eklenti uygulamayı görmüyor:** `TuneCord.exe`yi açıp popup'ta **Yeniden bağlan**a bas. `37645` portunu başka uygulamanın kullanmadığını kontrol et.
-- **Discord bekleniyor:** Web Discord değil masaüstü Discord açık olmalı. Application ID'yi tekrar kontrol et.
-- **Google OAuth hatası:** Extension ID'nin `mfhiohlcbedfhemkommfailjjfkdfobe` olduğuna, YouTube Data API v3'ün açık olduğuna ve hesabının test user listesinde bulunduğuna bak.
-- **Seçili playlistte görünmüyor:** Oynatılan URL'de `list=...` bulunmalı ve bu ID seçilen playlistle aynı olmalı.
+- Bridge yalnızca `127.0.0.1:37645` üzerinde dinler.
+- Eklenti ve uygulama rastgele oluşturulan bir eşleşme anahtarıyla konuşur.
+- Video veya ses kaydedilmez.
+- Yalnızca parça meta verisi, playlist ad/ID listesi ve kullanıcı ayarları saklanır.

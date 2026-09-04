@@ -1,4 +1,4 @@
-const $ = (id) => document.getElementById(id);
+const $ = id => document.getElementById(id);
 
 async function request(message) {
   const result = await chrome.runtime.sendMessage(message);
@@ -12,9 +12,18 @@ function showError(message = "") {
 }
 
 function render(status) {
-  $("bridgeState").textContent = status.discordConnected ? "Discord bağlı" : "Uygulama bağlı · Discord bekleniyor";
+  if (status.discordConnected) {
+    $("bridgeState").textContent = "Discord bağlı";
+    $("bridgeState").classList.add("online");
+  } else {
+    $("bridgeState").textContent = "Uygulama bağlı";
+    $("bridgeState").classList.remove("online");
+  }
+
   $("enabled").checked = Boolean(status.enabled);
-  document.querySelector(`input[name='mode'][value='${status.selectedOnly ? "selected" : "all"}']`).checked = true;
+  const mode = document.querySelector(`input[name='mode'][value='${status.selectedOnly ? "selected" : "all"}']`);
+  if (mode) mode.checked = true;
+
   if (status.track?.playing) {
     $("trackTitle").textContent = status.track.title || "Bilinmeyen şarkı";
     $("trackArtist").textContent = status.track.artist || status.track.source || "YouTube";
@@ -22,6 +31,8 @@ function render(status) {
     $("trackTitle").textContent = "Bir şey çalmıyor";
     $("trackArtist").textContent = "YouTube'u açıp bir şarkı başlat.";
   }
+
+  showError(status.discordError || "");
 }
 
 async function load(forcePair = false) {
@@ -30,19 +41,26 @@ async function load(forcePair = false) {
     render(await request({ type: forcePair ? "pair" : "getStatus" }));
   } catch (error) {
     $("bridgeState").textContent = "Uygulama kapalı";
+    $("bridgeState").classList.remove("online");
     showError("TuneCord.exe'yi aç, sonra yeniden bağlan.");
   }
 }
 
-$("enabled").addEventListener("change", async (event) => {
-  try { render(await request({ type: "setControl", control: { enabled: event.target.checked } })); }
-  catch (error) { showError(error.message); }
+$("enabled").addEventListener("change", async event => {
+  try {
+    render(await request({ type: "setControl", control: { enabled: event.target.checked } }));
+  } catch (error) {
+    showError(error.message);
+  }
 });
 
 for (const radio of document.querySelectorAll("input[name='mode']")) {
-  radio.addEventListener("change", async (event) => {
-    try { render(await request({ type: "setControl", control: { selectedOnly: event.target.value === "selected" } })); }
-    catch (error) { showError(error.message); }
+  radio.addEventListener("change", async event => {
+    try {
+      render(await request({ type: "setControl", control: { selectedOnly: event.target.value === "selected" } }));
+    } catch (error) {
+      showError(error.message);
+    }
   });
 }
 

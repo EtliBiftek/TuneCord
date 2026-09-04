@@ -4,6 +4,7 @@ const net = require("net");
 const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
+const { spawn } = require("child_process");
 
 const PORT = 37645;
 const DEFAULT_CONFIG = {
@@ -13,7 +14,11 @@ const DEFAULT_CONFIG = {
   bridgeToken: "",
   selectedPlaylistIds: [],
   playlists: [],
-  startup: false
+  startup: false,
+  setupComplete: false,
+  selectedBrowserId: "",
+  selectedBrowserPath: "",
+  extensionInstalled: false
 };
 
 let mainWindow;
@@ -30,7 +35,18 @@ let track = emptyTrack();
 let lastPresenceKey = null;
 
 function emptyTrack() {
-  return { title: "", artist: "", videoId: "", playlistId: "", url: "", thumbnail: "", duration: 0, currentTime: 0, playing: false, source: "" };
+  return {
+    title: "",
+    artist: "",
+    videoId: "",
+    playlistId: "",
+    url: "",
+    thumbnail: "",
+    duration: 0,
+    currentTime: 0,
+    playing: false,
+    source: ""
+  };
 }
 
 function configPath() {
@@ -51,7 +67,170 @@ function loadConfig() {
 function saveConfig() {
   fs.mkdirSync(path.dirname(configPath()), { recursive: true });
   fs.writeFileSync(configPath(), JSON.stringify(config, null, 2), "utf8");
-  app.setLoginItemSettings({ openAtLogin: Boolean(config.startup), args: ["--tray"] });
+  try {
+    app.setLoginItemSettings({ openAtLogin: Boolean(config.startup), args: ["--tray"] });
+  } catch (_) {
+    // Portable yapılarda başlangıç kaydı desteklenmiyorsa ayarı yine de sakla.
+  }
+}
+
+function browserCandidates() {
+  const local = process.env.LOCALAPPDATA || "";
+  const pf = process.env.PROGRAMFILES || "";
+  const pfx86 = process.env["PROGRAMFILES(X86)"] || "";
+  const roaming = process.env.APPDATA || "";
+
+  return [
+    {
+      id: "brave",
+      name: "Brave",
+      accent: "#fb542b",
+      paths: [
+        path.join(local, "BraveSoftware", "Brave-Browser", "Application", "brave.exe"),
+        path.join(pf, "BraveSoftware", "Brave-Browser", "Application", "brave.exe"),
+        path.join(pfx86, "BraveSoftware", "Brave-Browser", "Application", "brave.exe")
+      ]
+    },
+    {
+      id: "chrome",
+      name: "Google Chrome",
+      accent: "#4285f4",
+      paths: [
+        path.join(local, "Google", "Chrome", "Application", "chrome.exe"),
+        path.join(pf, "Google", "Chrome", "Application", "chrome.exe"),
+        path.join(pfx86, "Google", "Chrome", "Application", "chrome.exe")
+      ]
+    },
+    {
+      id: "edge",
+      name: "Microsoft Edge",
+      accent: "#0aa7b5",
+      paths: [
+        path.join(pfx86, "Microsoft", "Edge", "Application", "msedge.exe"),
+        path.join(pf, "Microsoft", "Edge", "Application", "msedge.exe"),
+        path.join(local, "Microsoft", "Edge", "Application", "msedge.exe")
+      ]
+    },
+    {
+      id: "vivaldi",
+      name: "Vivaldi",
+      accent: "#ef3939",
+      paths: [
+        path.join(local, "Vivaldi", "Application", "vivaldi.exe"),
+        path.join(pf, "Vivaldi", "Application", "vivaldi.exe"),
+        path.join(pfx86, "Vivaldi", "Application", "vivaldi.exe")
+      ]
+    },
+    {
+      id: "opera-gx",
+      name: "Opera GX",
+      accent: "#ff1b6b",
+      paths: [
+        path.join(local, "Programs", "Opera GX", "opera.exe"),
+        path.join(local, "Programs", "Opera GX", "launcher.exe"),
+        path.join(roaming, "Opera Software", "Opera GX Stable", "opera.exe")
+      ]
+    },
+    {
+      id: "opera",
+      name: "Opera",
+      accent: "#ff1b2d",
+      paths: [
+        path.join(local, "Programs", "Opera", "opera.exe"),
+        path.join(local, "Programs", "Opera", "launcher.exe")
+      ]
+    },
+    {
+      id: "chromium",
+      name: "Chromium",
+      accent: "#62a8e5",
+      paths: [
+        path.join(local, "Chromium", "Application", "chrome.exe"),
+        path.join(local, "Chromium", "Application", "chromium.exe"),
+        path.join(pf, "Chromium", "Application", "chrome.exe")
+      ]
+    }
+  ];
+}
+
+function detectBrowsers() {
+  const found = [];
+  const seen = new Set();
+
+  for (const browser of browserCandidates()) {
+    const executable = browser.paths.find(candidate => candidate && fs.existsSync(candidate));
+    if (!executable) continue;
+    const key = executable.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    found.push({ id: browser.id, name: browser.name, path: executable, accent: browser.accent });
+  }
+
+  return found;
+}
+
+function extensionSourcePath() {
+  const packaged = path.join(process.resourcesPath, "extension");
+  if (app.isPackaged && fs.existsSync(packaged)) return packaged;
+  return path.join(app.getAppPath(), "extension");
+}
+
+function installedExtensionPath() {
+  return path.join(app.getPath("userData"), "browser-extension");
+}
+
+function copyExtensionFiles() {
+  const source = extensionSourcePath();
+  const target = installedExtensionPath();
+  if (!fs.existsSync(source)) throw new Error("Paket içindeki TuneCord eklentisi bulunamadı.");
+  fs.rmSync(target, { recursive: true, force: true });
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.cpSync(source, target, { recursive: true });
+  return target;
+}
+
+function launchBrowserWithExtension(browser, extensionPath = installedExtensionPath()) {
+  if (!browser?.path || !fs.existsSync(browser.path)) throw new Error("Seçilen tarayıcı artık bulunamıyor.");
+  if (!fs.existsSync(extensionPath)) throw new Error("TuneCord eklenti klasörü bulunamadı.");
+
+  const child = spawn(browser.path, [
+    `--load-extension=${extensionPath}`,
+    "--new-window",
+    "https://www.youtube.com/"
+  ], {
+    detached: true,
+    stdio: "ignore",
+    windowsHide: false
+  });
+  child.unref();
+}
+
+function installBrowserExtension(browserId) {
+  const browsers = detectBrowsers();
+  const browser = browsers.find(item => item.id === browserId);
+  if (!browser) throw new Error("Seçtiğin Chromium tarayıcı bulunamadı. Yeniden tara.");
+
+  const extensionPath = copyExtensionFiles();
+  launchBrowserWithExtension(browser, extensionPath);
+
+  config.selectedBrowserId = browser.id;
+  config.selectedBrowserPath = browser.path;
+  config.extensionInstalled = true;
+  config.setupComplete = true;
+  saveConfig();
+
+  return { browser, extensionPath };
+}
+
+function selectedBrowserInfo() {
+  const detected = detectBrowsers();
+  return detected.find(item => item.id === config.selectedBrowserId) ||
+    (config.selectedBrowserPath ? {
+      id: config.selectedBrowserId,
+      name: config.selectedBrowserId || "Chromium",
+      path: config.selectedBrowserPath,
+      accent: "#d94683"
+    } : null);
 }
 
 function status() {
@@ -62,6 +241,11 @@ function status() {
     playlists: config.playlists,
     selectedPlaylistIds: config.selectedPlaylistIds,
     startup: config.startup,
+    setupComplete: config.setupComplete,
+    selectedBrowserId: config.selectedBrowserId,
+    selectedBrowser: selectedBrowserInfo(),
+    extensionInstalled: Boolean(config.extensionInstalled && fs.existsSync(installedExtensionPath())),
+    extensionPath: installedExtensionPath(),
     extensionConnected: Date.now() - extensionSeenAt < 35000,
     discordConnected,
     discordError,
@@ -284,15 +468,26 @@ function processPresence() {
 function parseJson(request) {
   return new Promise((resolve, reject) => {
     let body = "";
-    request.on("data", chunk => { body += chunk; if (body.length > 1024 * 1024) request.destroy(); });
+    request.on("data", chunk => {
+      body += chunk;
+      if (body.length > 1024 * 1024) request.destroy();
+    });
     request.on("end", () => {
-      try { resolve(body ? JSON.parse(body) : {}); } catch { reject(new Error("Geçersiz JSON")); }
+      try {
+        resolve(body ? JSON.parse(body) : {});
+      } catch (_) {
+        reject(new Error("Geçersiz JSON"));
+      }
     });
   });
 }
 
 function respond(response, code, body) {
-  response.writeHead(code, { "Content-Type": "application/json; charset=utf-8", "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "Content-Type, X-TuneCord-Token" });
+  response.writeHead(code, {
+    "Content-Type": "application/json; charset=utf-8",
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Headers": "Content-Type, X-TuneCord-Token"
+  });
   response.end(JSON.stringify(body));
 }
 
@@ -303,7 +498,9 @@ function authorized(request) {
 async function bridgeHandler(request, response) {
   if (request.method === "OPTIONS") return respond(response, 204, {});
   const url = new URL(request.url, `http://127.0.0.1:${PORT}`);
-  if (request.method === "GET" && url.pathname === "/api/pair") return respond(response, 200, { token: config.bridgeToken });
+  if (request.method === "GET" && url.pathname === "/api/pair") {
+    return respond(response, 200, { token: config.bridgeToken });
+  }
   if (!authorized(request)) return respond(response, 401, { error: "Eşleşme gerekli." });
   extensionSeenAt = Date.now();
 
@@ -313,7 +510,13 @@ async function bridgeHandler(request, response) {
     const body = await parseJson(request);
 
     if (request.method === "POST" && url.pathname === "/api/track") {
-      track = { ...emptyTrack(), ...body, playing: Boolean(body.playing), duration: Number(body.duration) || 0, currentTime: Number(body.currentTime) || 0 };
+      track = {
+        ...emptyTrack(),
+        ...body,
+        playing: Boolean(body.playing),
+        duration: Number(body.duration) || 0,
+        currentTime: Number(body.currentTime) || 0
+      };
       lastPresenceKey = null;
     } else if (request.method === "POST" && url.pathname === "/api/stop") {
       track = emptyTrack();
@@ -321,11 +524,15 @@ async function bridgeHandler(request, response) {
     } else if (request.method === "POST" && url.pathname === "/api/control") {
       if (typeof body.enabled === "boolean") config.enabled = body.enabled;
       if (typeof body.selectedOnly === "boolean") config.selectedOnly = body.selectedOnly;
+      if (typeof body.discordAppId === "string") config.discordAppId = body.discordAppId.replace(/\s/g, "");
+      if (Array.isArray(body.selectedPlaylistIds)) config.selectedPlaylistIds = body.selectedPlaylistIds;
       saveConfig();
       lastPresenceKey = null;
     } else if (request.method === "POST" && url.pathname === "/api/playlists") {
       const items = Array.isArray(body.items) ? body.items : [];
-      config.playlists = items.map(item => ({ id: String(item.id || ""), title: String(item.title || item.id || "") })).filter(item => item.id);
+      config.playlists = items
+        .map(item => ({ id: String(item.id || ""), title: String(item.title || item.id || "") }))
+        .filter(item => item.id);
       config.selectedPlaylistIds = config.selectedPlaylistIds.filter(id => config.playlists.some(item => item.id === id));
       saveConfig();
     } else {
@@ -343,28 +550,38 @@ async function bridgeHandler(request, response) {
 function startBridge() {
   server = http.createServer(bridgeHandler);
   server.listen(PORT, "127.0.0.1");
-  server.on("error", () => {});
+  server.on("error", error => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("bridge-error", error.message);
+    }
+  });
 }
 
 function showWindow() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
   mainWindow.show();
   mainWindow.focus();
 }
 
 function createTray() {
-  const traySvg = `<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32"><rect width="32" height="32" rx="9" fill="#be185d"/><path d="M10 9h12v4h-4v10.3a4.5 4.5 0 1 1-3-4.24V13h-5z" fill="white"/></svg>`;
+  const traySvg = `<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32"><rect width="32" height="32" rx="10" fill="#d62976"/><path d="M11 9h11v4h-3.5v9.2a4.3 4.3 0 1 1-3-4.1V13H11z" fill="white"/></svg>`;
   tray = new Tray(nativeImage.createFromDataURL(`data:image/svg+xml;base64,${Buffer.from(traySvg).toString("base64")}`));
   tray.setToolTip("TuneCord");
 
   const refresh = () => tray.setContextMenu(Menu.buildFromTemplate([
     { label: "TuneCord'u aç", click: showWindow },
-    { label: "Discord'da göster", type: "checkbox", checked: config.enabled, click: item => {
-      config.enabled = item.checked;
-      saveConfig();
-      lastPresenceKey = null;
-      processPresence();
-      sendStatus();
-    } },
+    {
+      label: "Discord'da göster",
+      type: "checkbox",
+      checked: config.enabled,
+      click: item => {
+        config.enabled = item.checked;
+        saveConfig();
+        lastPresenceKey = null;
+        processPresence();
+        sendStatus();
+      }
+    },
     { type: "separator" },
     { label: "Çıkış", click: () => { app.isQuitting = true; app.quit(); } }
   ]));
@@ -376,15 +593,19 @@ function createTray() {
 
 function createWindow() {
   mainWindow = new BrowserWindow({
-    width: 920,
-    height: 700,
-    minWidth: 760,
-    minHeight: 590,
+    width: 980,
+    height: 760,
+    minWidth: 820,
+    minHeight: 640,
     show: false,
-    backgroundColor: "#120d11",
+    backgroundColor: "#0b090b",
     titleBarStyle: "hidden",
-    titleBarOverlay: { color: "#120d11", symbolColor: "#f8f5f7", height: 36 },
-    webPreferences: { preload: path.join(__dirname, "preload.js"), contextIsolation: true, nodeIntegration: false }
+    titleBarOverlay: { color: "#0b090b", symbolColor: "#f7f3f6", height: 34 },
+    webPreferences: {
+      preload: path.join(__dirname, "preload.js"),
+      contextIsolation: true,
+      nodeIntegration: false
+    }
   });
 
   mainWindow.loadFile(path.join(__dirname, "index.html"));
@@ -398,6 +619,32 @@ function createWindow() {
 }
 
 ipcMain.handle("state", () => status());
+ipcMain.handle("scan-browsers", () => detectBrowsers());
+ipcMain.handle("install-extension", (_, browserId) => {
+  const result = installBrowserExtension(String(browserId || ""));
+  sendStatus();
+  return { ...result, state: status() };
+});
+ipcMain.handle("launch-browser", () => {
+  const browser = selectedBrowserInfo();
+  if (!browser) throw new Error("Önce bir Chromium tarayıcı seç.");
+  if (!fs.existsSync(installedExtensionPath())) copyExtensionFiles();
+  launchBrowserWithExtension(browser);
+  return { ok: true };
+});
+ipcMain.handle("skip-setup", () => {
+  config.setupComplete = true;
+  config.extensionInstalled = false;
+  saveConfig();
+  sendStatus();
+  return status();
+});
+ipcMain.handle("reset-setup", () => {
+  config.setupComplete = false;
+  saveConfig();
+  sendStatus();
+  return status();
+});
 ipcMain.handle("save", (_, next) => {
   if (typeof next.enabled === "boolean") config.enabled = next.enabled;
   if (typeof next.selectedOnly === "boolean") config.selectedOnly = next.selectedOnly;
@@ -412,13 +659,11 @@ ipcMain.handle("save", (_, next) => {
   sendStatus();
   return status();
 });
-
 ipcMain.handle("reset-pairing", () => {
   config.bridgeToken = crypto.randomBytes(24).toString("hex");
   saveConfig();
   return { token: config.bridgeToken };
 });
-
 ipcMain.handle("window", (_, action) => {
   if (action === "minimize") mainWindow.minimize();
   if (action === "close") mainWindow.hide();
@@ -433,8 +678,12 @@ app.whenReady().then(() => {
   createWindow();
   createTray();
   startBridge();
-  setInterval(() => { processPresence(); sendStatus(); }, 5000);
-  if (!process.argv.includes("--tray")) showWindow();
+  saveConfig();
+  setInterval(() => {
+    processPresence();
+    sendStatus();
+  }, 5000);
+  if (!process.argv.includes("--tray") || !config.setupComplete) showWindow();
 });
 
 app.on("before-quit", () => {
