@@ -30,6 +30,12 @@ jobs:
       - name: Patch native helper runtime behavior
         run: python scripts/patch_native_helper_timeout.py
 
+      - name: Verify native bridge patch
+        shell: pwsh
+        run: |
+          if (!(Select-String -Path "native-helper/src/main.rs" -SimpleMatch '("POST","/api/native")')) { throw "Native helper HTTP bridge endpoint is missing" }
+          if (!(Select-String -Path "native-host/src/main.rs" -SimpleMatch 'http_post_json("/api/native"')) { throw "Native messaging host is not using the stateless HTTP bridge" }
+
       - name: Build low-memory native tray backend
         run: cargo build --release --manifest-path native-helper/Cargo.toml
 
@@ -62,8 +68,8 @@ jobs:
         if: github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.4.6
+          tag_name: v1.4.7
           target_commitish: ${{ github.sha }}
-          name: TuneCord v1.4.6
+          name: TuneCord v1.4.7
           generate_release_notes: true
           files: dist/TuneCord.exe
