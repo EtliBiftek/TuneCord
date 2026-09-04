@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "TuneCord - YouTube Discord Presence",
   "description": "YouTube ve YouTube Music'te dinlediğin parçayı TuneCord üzerinden Discord'da gösterir.",
-  "version": "1.4.4",
+  "version": "1.4.5",
   "permissions": ["storage", "nativeMessaging"],
   "host_permissions": [
     "https://www.youtube.com/*",
