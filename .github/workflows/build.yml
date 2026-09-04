@@ -1,4 +1,4 @@
-name: Build RubyTune
+name: Build TuneCord
 
 on:
   workflow_dispatch:
@@ -17,7 +17,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: microsoft/setup-msbuild@v2
       - name: Build native app
-        run: msbuild RubyTune.sln /m /p:Configuration=Release /p:Platform=x64
+        run: msbuild TuneCord.sln /m /p:Configuration=Release /p:Platform=x64
       - name: Prepare package
         shell: pwsh
         run: |
@@ -26,8 +26,8 @@ jobs:
           Copy-Item extension\* package\extension\ -Recurse
           Copy-Item tools\* package\tools\ -Recurse
           Copy-Item README.md, LICENSE, Build.ps1, install.ps1, uninstall.ps1 package\
-          Compress-Archive -Path package\* -DestinationPath RubyTune-Windows-x64.zip -Force
+          Compress-Archive -Path package\* -DestinationPath TuneCord-Windows-x64.zip -Force
       - uses: actions/upload-artifact@v4
         with:
-          name: RubyTune-Windows-x64
-          path: RubyTune-Windows-x64.zip
+          name: TuneCord-Windows-x64
+          path: TuneCord-Windows-x64.zip
