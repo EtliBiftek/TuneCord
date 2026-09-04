@@ -2,10 +2,13 @@ const { app, BrowserWindow, ipcMain } = require("electron");
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
-const { spawn } = require("child_process");
+const { spawn, spawnSync } = require("child_process");
 
 const PORT = 37645;
 const VERSION = app.getVersion();
+const NATIVE_HOST = "com.tunecord.bridge";
+const CHROMIUM_EXTENSION_ID = "mfhiohlcbedfhemkommfailjjfkdfobe";
+const FIREFOX_EXTENSION_ID = "tunecord@etlibiftek.local";
 let mainWindow = null;
 let pollTimer = null;
 let helperReady = false;
@@ -45,6 +48,10 @@ function packagedResource(name) {
   return path.join(app.getAppPath(), name);
 }
 
+function tuneCordDataDir() {
+  return path.join(process.env.APPDATA || process.env.LOCALAPPDATA || app.getPath("appData"), "TuneCord");
+}
+
 function localBinDir() {
   return path.join(process.env.LOCALAPPDATA || app.getPath("appData"), "TuneCord", "bin");
 }
@@ -74,14 +81,63 @@ function replaceHelperBinary(source, target) {
   fs.renameSync(temp, target);
 }
 
+function addRegistryNativeHost(key, manifestPath) {
+  const result = spawnSync("reg.exe", ["add", key, "/ve", "/t", "REG_SZ", "/d", manifestPath, "/f"], {
+    windowsHide: true,
+    encoding: "utf8"
+  });
+  return !result.error && result.status === 0;
+}
+
+function registerNativeMessaging(nativeHostPath) {
+  const dir = path.join(tuneCordDataDir(), "native-messaging");
+  fs.mkdirSync(dir, { recursive: true });
+
+  const chromiumManifestPath = path.join(dir, `${NATIVE_HOST}.chromium.json`);
+  const firefoxManifestPath = path.join(dir, `${NATIVE_HOST}.firefox.json`);
+  fs.writeFileSync(chromiumManifestPath, JSON.stringify({
+    name: NATIVE_HOST,
+    description: "TuneCord browser bridge",
+    path: nativeHostPath,
+    type: "stdio",
+    allowed_origins: [`chrome-extension://${CHROMIUM_EXTENSION_ID}/`]
+  }, null, 2));
+  fs.writeFileSync(firefoxManifestPath, JSON.stringify({
+    name: NATIVE_HOST,
+    description: "TuneCord browser bridge",
+    path: nativeHostPath,
+    type: "stdio",
+    allowed_extensions: [FIREFOX_EXTENSION_ID]
+  }, null, 2));
+
+  const chromiumKeys = [
+    `HKCU\\Software\\Google\\Chrome\\NativeMessagingHosts\\${NATIVE_HOST}`,
+    `HKCU\\Software\\Chromium\\NativeMessagingHosts\\${NATIVE_HOST}`,
+    `HKCU\\Software\\BraveSoftware\\Brave-Browser\\NativeMessagingHosts\\${NATIVE_HOST}`,
+    `HKCU\\Software\\Microsoft\\Edge\\NativeMessagingHosts\\${NATIVE_HOST}`,
+    `HKCU\\Software\\Vivaldi\\NativeMessagingHosts\\${NATIVE_HOST}`,
+    `HKCU\\Software\\Opera Software\\Opera Stable\\NativeMessagingHosts\\${NATIVE_HOST}`
+  ];
+  for (const key of chromiumKeys) addRegistryNativeHost(key, chromiumManifestPath);
+  addRegistryNativeHost(`HKCU\\Software\\Mozilla\\NativeMessagingHosts\\${NATIVE_HOST}`, firefoxManifestPath);
+}
+
 async function ensureHelper() {
   fs.mkdirSync(localBinDir(), { recursive: true });
   const bundledHelper = packagedResource("tunecord-helper.exe");
+  const bundledNativeHost = packagedResource("tunecord-native-host.exe");
   const bundledIcon = packagedResource("tunecord-icon.ico");
   const helperPath = path.join(localBinDir(), `tunecord-helper-${VERSION}.exe`);
+  const nativeHostPath = path.join(localBinDir(), `tunecord-native-host-${VERSION}.exe`);
   const iconPath = path.join(localBinDir(), "tunecord.ico");
   if (!fs.existsSync(bundledHelper)) throw new Error("TuneCord native helper pakette bulunamadı.");
+  if (!fs.existsSync(bundledNativeHost)) throw new Error("TuneCord native messaging bridge pakette bulunamadı.");
   if (fs.existsSync(bundledIcon)) { try { fs.copyFileSync(bundledIcon, iconPath); } catch (_) {} }
+
+  // Tarayıcı localhost/WebSocket kısıtlamalarından etkilenmesin diye extension
+  // trafiğini Chrome/Firefox'un resmi Native Messaging API'sinden geçiriyoruz.
+  replaceHelperBinary(bundledNativeHost, nativeHostPath);
+  registerNativeMessaging(nativeHostPath);
 
   let state = await currentBackend();
   if (state?.backend === "native" && state.helperVersion !== VERSION) {
@@ -94,8 +150,6 @@ async function ensureHelper() {
   }
 
   if (!state) {
-    // Aynı sürüm numarasıyla yeni bir build indirilmiş olsa bile eski/bzuk helper'ı
-    // yeniden kullanma. Paket içindeki helper her başlangıçta tazelenir.
     replaceHelperBinary(bundledHelper, helperPath);
     const launcher = process.env.PORTABLE_EXECUTABLE_FILE || process.execPath;
     const child = spawn(helperPath, ["--background", "--app-exe", launcher], {
