@@ -2,17 +2,15 @@ const $ = id => document.getElementById(id);
 
 let state = {};
 let setupFlowActive = false;
-let setupStep = 1;
 let detectedBrowsers = [];
 let selectedSetupBrowserId = "";
+let saveChain = Promise.resolve();
+let discordTimer = null;
+let discordEditing = false;
 
 function escapeHtml(value) {
   return String(value).replace(/[&<>'"]/g, char => ({
-    "&": "&amp;",
-    "<": "&lt;",
-    ">": "&gt;",
-    "'": "&#39;",
-    '"': "&quot;"
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;"
   })[char]);
 }
 
@@ -20,16 +18,12 @@ function selectedIds() {
   return [...document.querySelectorAll("#playlistList .playlist-item input:checked")].map(input => input.value);
 }
 
-function isManualInstallBrowser(browser) {
-  return browser?.id === "brave" || browser?.id === "chrome";
-}
-
-function extensionsPage(browser) {
-  return browser?.id === "brave" ? "brave://extensions/" : "chrome://extensions/";
+function setMessage(text = "", bad = false) {
+  $("message").textContent = text;
+  $("message").className = bad ? "form-message bad" : "form-message";
 }
 
 function setSetupStep(step) {
-  setupStep = step;
   for (const number of [1, 2, 3]) {
     $(`setupStep${number}`).hidden = number !== step;
     document.querySelector(`[data-step-dot="${number}"]`)?.classList.toggle("active", number <= step);
@@ -52,7 +46,6 @@ function showApp() {
 function renderBrowserChoices() {
   const list = $("browserList");
   list.replaceChildren();
-
   if (!detectedBrowsers.length) {
     const empty = document.createElement("div");
     empty.className = "scan-placeholder";
@@ -71,11 +64,9 @@ function renderBrowserChoices() {
     button.addEventListener("click", () => {
       selectedSetupBrowserId = browser.id;
       renderBrowserChoices();
-      $("browserNext").disabled = false;
     });
     list.append(button);
   }
-
   $("browserNext").disabled = !selectedSetupBrowserId;
 }
 
@@ -100,7 +91,6 @@ function renderPlaylists() {
   const query = $("search").value.trim().toLocaleLowerCase("tr");
   const entries = (state.playlists || []).filter(item => `${item.title} ${item.id}`.toLocaleLowerCase("tr").includes(query));
   const selected = new Set(state.selectedPlaylistIds || []);
-
   $("playlistList").innerHTML = entries.length
     ? entries.map(item => `
       <label class="playlist-item">
@@ -112,7 +102,6 @@ function renderPlaylists() {
 
 function render(next) {
   state = next || {};
-
   if (!state.setupComplete && !setupFlowActive) {
     showSetup(1);
     scanBrowsers();
@@ -122,7 +111,7 @@ function render(next) {
 
   $("enabled").checked = Boolean(state.enabled);
   $("startup").checked = Boolean(state.startup);
-  $("discordId").value = state.discordAppId || "";
+  if (!discordEditing) $("discordId").value = state.discordAppId || "";
   const mode = document.querySelector(`input[name="mode"][value="${state.selectedOnly ? "selected" : "all"}"]`);
   if (mode) mode.checked = true;
 
@@ -140,7 +129,7 @@ function render(next) {
 
   $("extensionDot").classList.toggle("online", Boolean(state.extensionConnected));
   $("discordDot").classList.toggle("online", Boolean(state.discordConnected));
-  $("extensionState").textContent = state.extensionConnected ? "Eklenti bağlı" : "Eklenti bekleniyor";
+  $("extensionState").textContent = state.extensionConnected ? "Eklenti bağlı · WebSocket" : "Eklenti bekleniyor";
   $("discordState").textContent = state.discordConnected ? "Discord bağlı" : "Discord bekleniyor";
 
   $("trackTitle").textContent = state.track?.playing ? (state.track.title || "Bilinmeyen şarkı") : "Bir şey çalmıyor";
@@ -155,89 +144,59 @@ function render(next) {
   $("browserBadge").textContent = browser?.name || "Seçilmedi";
   $("browserName").textContent = browser?.name || "Tarayıcı seçilmedi";
   $("browserPath").textContent = browser?.path || "Kurulum sihirbazını çalıştır.";
-  $("installState").textContent = state.extensionInstalled ? "Dosyalar hazır" : "Kurulu değil";
+  $("installState").textContent = state.extensionInstalled ? "Dosyalar hazır" : "Hazır değil";
   $("liveExtensionState").textContent = state.extensionConnected ? "Bağlı" : "Bekleniyor";
   $("openBrowser").disabled = !browser;
-
   renderPlaylists();
 }
 
-async function save(message = "Ayarlar kaydedildi.") {
-  const appId = $("discordId").value.replace(/\s/g, "");
-  if (appId && !/^\d{17,22}$/.test(appId)) {
-    $("message").textContent = "Discord Application ID 17–22 rakam olmalı.";
-    $("message").className = "form-message bad";
-    return;
-  }
-
-  try {
-    const next = await window.tuneCord.save({
-      enabled: $("enabled").checked,
-      startup: $("startup").checked,
-      selectedOnly: document.querySelector("input[name=mode]:checked")?.value === "selected",
-      discordAppId: appId,
-      selectedPlaylistIds: selectedIds()
-    });
-    render(next);
-    $("message").textContent = message;
-    $("message").className = "form-message";
-  } catch (error) {
-    $("message").textContent = error.message;
-    $("message").className = "form-message bad";
-  }
+function persist(partial, text = "Otomatik kaydedildi.") {
+  saveChain = saveChain.then(async () => {
+    try {
+      const next = await window.tuneCord.save(partial);
+      render(next);
+      setMessage(text, false);
+      return next;
+    } catch (error) {
+      setMessage(error.message, true);
+      throw error;
+    }
+  }).catch(() => {});
+  return saveChain;
 }
 
 $("rescanBrowsers").addEventListener("click", scanBrowsers);
 $("browserNext").addEventListener("click", () => {
   const browser = detectedBrowsers.find(item => item.id === selectedSetupBrowserId);
   if (!browser) return;
-
-  if (isManualInstallBrowser(browser)) {
-    $("installDescription").textContent = `${browser.name} seçildi. Bu tarayıcıda eklentiyi sessizce kalıcı yüklemek güvenilir olmadığı için TuneCord eklenti dosyalarını hazırlayacak; son yükleme onayını sen tarayıcıdan vereceksin.`;
-    $("installExtension").textContent = "Dosyaları hazırla";
-  } else {
-    $("installDescription").textContent = `${browser.name} seçildi. TuneCord eklentiyi hazırlayıp ${browser.name}'ı eklentiyle başlatacak.`;
-    $("installExtension").textContent = "Eklentiyi kur";
-  }
-
+  const manualReason = browser.id === "chrome"
+    ? "Google Chrome otomatik eklenti kurulumunu desteklemediği için son adımı sen tamamlayacaksın."
+    : browser.id === "brave"
+      ? "Brave çalışan profile komut satırıyla kalıcı eklenti eklemediği için güvenilir Load unpacked yöntemi kullanılacak."
+      : "Chromium güvenlik modeli nedeniyle TuneCord dosyaları hazırlar; son Load unpacked onayını tarayıcıda sen verirsin.";
+  $("installDescription").textContent = `${browser.name} seçildi. ${manualReason}`;
   $("installMessage").textContent = "";
+  $("installExtension").textContent = "Dosyaları hazırla";
   setSetupStep(2);
 });
 $("setupBack").addEventListener("click", () => setSetupStep(1));
 $("installExtension").addEventListener("click", async () => {
   const button = $("installExtension");
-  const browser = detectedBrowsers.find(item => item.id === selectedSetupBrowserId);
-  const manual = isManualInstallBrowser(browser);
   button.disabled = true;
-  button.textContent = manual ? "Hazırlanıyor…" : "Kuruluyor…";
+  button.textContent = "Hazırlanıyor…";
   $("installMessage").textContent = "";
-
   try {
     const result = await window.tuneCord.installExtension(selectedSetupBrowserId);
     state = result.state;
-    const browserName = result.browser?.name || browser?.name || "Tarayıcı";
-
-    if (manual) {
-      const page = extensionsPage(result.browser || browser);
-      const pathText = result.extensionPath || state.extensionPath || "%APPDATA%\\TuneCord\\browser-extension";
-      const title = $("setupStep3").querySelector("h1");
-      title.textContent = "Eklentiyi tarayıcıya ekle.";
-      $("successText").style.whiteSpace = "pre-line";
-      $("successText").textContent = `${browserName}, kalıcı otomatik eklenti kurulumuna izin vermediği için son adımı elle tamamlaman gerekiyor.\n\nEklenti klasörü:\n${pathText}\n\n1. ${page} adresini aç.\n2. Sağ üstten “Geliştirici modu / Developer mode” seçeneğini aç.\n3. “Paketlenmemiş öğe yükle / Load unpacked” düğmesine bas.\n4. Yukarıdaki TuneCord eklenti klasörünü seç.\n5. TuneCord eklentisi listede görününce YouTube veya YouTube Music'i yenile.\n\nNot: Az önce açılan YouTube sekmesi eklentinin kurulduğu anlamına gelmiyor; yukarıdaki adımlar tamamlanmalı.`;
-      $("finishSetup").textContent = "Adımları yaptım, TuneCord'u aç";
-    } else {
-      $("setupStep3").querySelector("h1").textContent = "Kurulum tamamlandı.";
-      $("successText").style.whiteSpace = "normal";
-      $("successText").textContent = `${browserName} eklentiyle açıldı. Tarayıcı ek bir güvenlik onayı gösterirse onayladıktan sonra YouTube'da bir şarkı başlatabilirsin.`;
-      $("finishSetup").textContent = "TuneCord'u aç";
-    }
-
+    $("successText").textContent = `${result.browser?.name || "Tarayıcı"} için eklenti dosyaları hazırlandı.`;
+    $("extensionPathCode").textContent = result.extensionPath;
+    $("extensionsUrlCode").textContent = result.extensionsUrl || "chrome://extensions/";
     setSetupStep(3);
   } catch (error) {
     $("installMessage").textContent = error.message;
   } finally {
     button.disabled = false;
-    button.textContent = manual ? "Dosyaları hazırla" : "Eklentiyi kur";
+    button.textContent = "Dosyaları hazırla";
   }
 });
 $("skipSetup").addEventListener("click", async () => {
@@ -245,8 +204,7 @@ $("skipSetup").addEventListener("click", async () => {
     state = await window.tuneCord.skipSetup();
     showApp();
     render(state);
-    $("message").textContent = "Eklenti kurulmadı; YouTube algılama çalışmayacak. Tarayıcı kartından kurulumu yeniden açabilirsin.";
-    $("message").className = "form-message bad";
+    setMessage("Eklenti kurulmadı; YouTube algılama çalışmayacak.", true);
   } catch (error) {
     $("installMessage").textContent = error.message;
   }
@@ -256,34 +214,46 @@ $("finishSetup").addEventListener("click", () => {
   render(state);
 });
 
-$("save").addEventListener("click", () => save());
-$("enabled").addEventListener("change", () => save("Presence ayarı güncellendi."));
-$("startup").addEventListener("change", () => save("Başlangıç ayarı güncellendi."));
+$("enabled").addEventListener("change", event => persist({ enabled: event.target.checked }, "Presence ayarı anında kaydedildi."));
+$("startup").addEventListener("change", event => persist({ startup: event.target.checked }, "Başlangıç ayarı anında kaydedildi."));
 for (const radio of document.querySelectorAll("input[name=mode]")) {
-  radio.addEventListener("change", () => save("Playlist filtresi güncellendi."));
+  radio.addEventListener("change", event => persist({ selectedOnly: event.target.value === "selected" }, "Playlist filtresi anında kaydedildi."));
 }
-$("search").addEventListener("input", renderPlaylists);
-$("playlistList").addEventListener("change", () => {
-  $("message").textContent = "Playlist seçimini kaydetmek için Kaydet'e bas.";
-  $("message").className = "form-message";
+
+$("discordId").addEventListener("focus", () => { discordEditing = true; });
+$("discordId").addEventListener("blur", () => { discordEditing = false; });
+$("discordId").addEventListener("input", event => {
+  clearTimeout(discordTimer);
+  const appId = event.target.value.replace(/\s/g, "");
+  if (appId && !/^\d{17,22}$/.test(appId)) {
+    setMessage("Application ID tamamlanınca otomatik kaydedilecek.", false);
+    return;
+  }
+  discordTimer = setTimeout(() => persist({ discordAppId: appId }, "Application ID otomatik kaydedildi."), 300);
 });
+
+$("search").addEventListener("input", renderPlaylists);
+$("playlistList").addEventListener("change", event => {
+  if (!event.target.matches('input[type="checkbox"]')) return;
+  persist({ selectedPlaylistIds: selectedIds() }, "Playlist seçimi anında kaydedildi.");
+});
+
 $("reset").addEventListener("click", async () => {
-  await window.tuneCord.resetPairing();
-  $("message").textContent = "Eşleşme yenilendi. Eklenti birkaç saniye içinde tekrar bağlanır.";
-  $("message").className = "form-message";
+  try {
+    await window.tuneCord.resetPairing();
+    setMessage("WebSocket eşleşmesi yenilendi; eklenti otomatik yeniden bağlanacak.");
+  } catch (error) {
+    setMessage(error.message, true);
+  }
 });
 $("openBrowser").addEventListener("click", async () => {
   const button = $("openBrowser");
   button.disabled = true;
   try {
     await window.tuneCord.launchBrowser();
-    $("message").textContent = state.selectedBrowserId === "brave" || state.selectedBrowserId === "chrome"
-      ? "Tarayıcı açıldı. Eklentiyi bir kez Load unpacked ile kurduysan normal şekilde çalışır."
-      : "Tarayıcı TuneCord eklentisiyle açıldı.";
-    $("message").className = "form-message";
+    setMessage("Tarayıcı açıldı.");
   } catch (error) {
-    $("message").textContent = error.message;
-    $("message").className = "form-message bad";
+    setMessage(error.message, true);
   } finally {
     button.disabled = false;
   }
@@ -297,7 +267,7 @@ $("rerunSetup").addEventListener("click", async () => {
 
 window.tuneCord.onState(next => render(next));
 window.tuneCord.onBridgeError(message => {
-  $("discordError").textContent = `Yerel bridge: ${message}`;
+  $("discordError").textContent = `Yerel WebSocket: ${message}`;
 });
 
 window.tuneCord.state().then(next => {
@@ -313,6 +283,5 @@ window.tuneCord.state().then(next => {
   }
 }).catch(error => {
   $("appShell").hidden = false;
-  $("message").textContent = error.message;
-  $("message").className = "form-message bad";
+  setMessage(error.message, true);
 });

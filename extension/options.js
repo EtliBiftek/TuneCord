@@ -1,6 +1,9 @@
 const $ = id => document.getElementById(id);
 let status = null;
 let selectedIds = new Set();
+let discordTimer = null;
+let discordEditing = false;
+let saveChain = Promise.resolve();
 
 async function request(message) {
   const result = await chrome.runtime.sendMessage(message);
@@ -17,7 +20,6 @@ function renderPlaylists() {
   const query = $("search").value.trim().toLocaleLowerCase("tr");
   const items = (status?.playlists || []).filter(item => `${item.title} ${item.id}`.toLocaleLowerCase("tr").includes(query));
   $("playlists").replaceChildren();
-
   if (!items.length) {
     const empty = document.createElement("p");
     empty.className = "empty";
@@ -36,6 +38,7 @@ function renderPlaylists() {
     checkbox.addEventListener("change", () => {
       if (checkbox.checked) selectedIds.add(item.id);
       else selectedIds.delete(item.id);
+      persist({ selectedPlaylistIds: [...selectedIds] }, "Playlist seçimi anında kaydedildi.");
     });
     const span = document.createElement("span");
     span.innerHTML = "<b></b><small></small>";
@@ -50,11 +53,26 @@ function render() {
   if (!status) return;
   $("appState").textContent = status.discordConnected ? "Discord bağlı" : "Uygulama bağlı";
   $("appState").classList.toggle("online", Boolean(status.discordConnected));
-  $("discordAppId").value = status.discordAppId || "";
+  if (!discordEditing) $("discordAppId").value = status.discordAppId || "";
   $("enabled").checked = Boolean(status.enabled);
   const mode = document.querySelector(`input[name='mode'][value='${status.selectedOnly ? "selected" : "all"}']`);
   if (mode) mode.checked = true;
   renderPlaylists();
+}
+
+function persist(control, text = "Otomatik kaydedildi.") {
+  saveChain = saveChain.then(async () => {
+    try {
+      status = await request({ type: "setControl", control });
+      selectedIds = new Set(status.selectedPlaylistIds || []);
+      render();
+      message(text);
+    } catch (error) {
+      message(error.message, true);
+      throw error;
+    }
+  }).catch(() => {});
+  return saveChain;
 }
 
 async function load() {
@@ -75,9 +93,7 @@ async function load() {
       const when = state.lastPlaylistSync ? new Date(state.lastPlaylistSync).toLocaleString("tr-TR") : "";
       $("sessionState").textContent = `YouTube oturumu kullanılıyor${when ? ` · ${when}` : ""}`;
     }
-  } catch (_) {
-    // Uygulama kapalı olsa da extension ayar sayfası açılabilir.
-  }
+  } catch (_) {}
 }
 
 $("sessionSync").addEventListener("click", async () => {
@@ -99,27 +115,28 @@ $("sessionSync").addEventListener("click", async () => {
   }
 });
 
-$("save").addEventListener("click", async () => {
-  const control = {
-    enabled: $("enabled").checked,
-    selectedOnly: document.querySelector("input[name='mode']:checked")?.value === "selected",
-    discordAppId: $("discordAppId").value.trim(),
-    selectedPlaylistIds: [...selectedIds]
-  };
+$("enabled").addEventListener("change", event => persist({ enabled: event.target.checked }, "Presence ayarı anında kaydedildi."));
+for (const radio of document.querySelectorAll("input[name='mode']")) {
+  radio.addEventListener("change", event => persist({ selectedOnly: event.target.value === "selected" }, "Playlist filtresi anında kaydedildi."));
+}
 
-  if (control.discordAppId && !/^\d{17,22}$/.test(control.discordAppId)) {
-    return message("Discord Application ID yalnızca 17–22 rakam olmalı.", true);
+$("discordAppId").addEventListener("focus", () => { discordEditing = true; });
+$("discordAppId").addEventListener("blur", () => { discordEditing = false; });
+$("discordAppId").addEventListener("input", event => {
+  clearTimeout(discordTimer);
+  const value = event.target.value.replace(/\s/g, "");
+  if (value && !/^\d{17,22}$/.test(value)) {
+    message("Application ID tamamlanınca otomatik kaydedilecek.");
+    return;
   }
-
-  try {
-    status = await request({ type: "setControl", control });
-    selectedIds = new Set(status.selectedPlaylistIds || []);
-    render();
-    message("Ayarlar kaydedildi.");
-  } catch (error) {
-    message(error.message, true);
-  }
+  discordTimer = setTimeout(() => persist({ discordAppId: value }, "Application ID otomatik kaydedildi."), 300);
 });
 
 $("search").addEventListener("input", renderPlaylists);
+chrome.runtime.onMessage.addListener(messageData => {
+  if (messageData?.type !== "bridgeState" || !messageData.state) return;
+  status = messageData.state;
+  selectedIds = new Set(status.selectedPlaylistIds || []);
+  render();
+});
 load();

@@ -1,53 +1,180 @@
-const BRIDGE = "http://127.0.0.1:37645";
+const BRIDGE = "ws://127.0.0.1:37645/ws";
+let socket = null;
+let connectPromise = null;
 let currentTabId = null;
+let requestSeq = 0;
+let handshakeSeq = 0;
+const pending = new Map();
 
-async function pairBridge(force = false) {
-  const stored = await chrome.storage.local.get("bridgeToken");
-  if (stored.bridgeToken && !force) return stored.bridgeToken;
-
-  const response = await fetch(`${BRIDGE}/api/pair`, { cache: "no-store" });
-  if (!response.ok) throw new Error("TuneCord uygulaması eşleşmeye izin vermedi.");
-  const data = await response.json();
-  if (!data.token) throw new Error("Eşleşme anahtarı alınamadı.");
-  await chrome.storage.local.set({ bridgeToken: data.token });
-  return data.token;
+function badge(text, color) {
+  chrome.action.setBadgeText({ text }).catch(() => {});
+  if (color) chrome.action.setBadgeBackgroundColor({ color }).catch(() => {});
 }
 
-async function bridgeFetch(path, options = {}, retry = true) {
-  const token = await pairBridge(false);
-  const headers = new Headers(options.headers || {});
-  headers.set("X-TuneCord-Token", token);
-  if (options.body) headers.set("Content-Type", "application/json; charset=utf-8");
+function rejectPending(error) {
+  for (const { reject, timer } of pending.values()) {
+    clearTimeout(timer);
+    reject(error);
+  }
+  pending.clear();
+}
+
+async function storedToken() {
+  const data = await chrome.storage.local.get("bridgeToken");
+  return data.bridgeToken || "";
+}
+
+function emitBridgeState(state) {
+  chrome.runtime.sendMessage({ type: "bridgeState", state }).catch(() => {});
+}
+
+function closeSocket() {
+  const old = socket;
+  socket = null;
+  connectPromise = null;
+  if (old && (old.readyState === WebSocket.OPEN || old.readyState === WebSocket.CONNECTING)) {
+    try { old.close(); } catch (_) {}
+  }
+}
+
+async function ensureSocket(forcePair = false) {
+  if (forcePair) {
+    await chrome.storage.local.remove("bridgeToken");
+    closeSocket();
+  }
+  if (socket?.readyState === WebSocket.OPEN && socket.__authenticated) return socket;
+  if (connectPromise) return connectPromise;
+
+  connectPromise = (async () => {
+    let token = await storedToken();
+    return new Promise((resolve, reject) => {
+      const ws = new WebSocket(BRIDGE);
+      socket = ws;
+      const handshakeId = `hello-${Date.now()}-${++handshakeSeq}`;
+      let settled = false;
+      const finishResolve = value => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+        resolve(value);
+      };
+      const finishReject = error => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+        reject(error);
+      };
+      const timeout = setTimeout(() => {
+        if (!ws.__authenticated) {
+          try { ws.close(); } catch (_) {}
+          finishReject(new Error("TuneCord WebSocket bağlantısı zaman aşımına uğradı."));
+        }
+      }, 6000);
+
+      const sendHello = () => {
+        if (ws.readyState !== WebSocket.OPEN) return;
+        ws.send(JSON.stringify({ id: handshakeId, type: "hello", token, extensionId: chrome.runtime.id }));
+      };
+
+      ws.onopen = sendHello;
+      ws.onmessage = async event => {
+        let message;
+        try {
+          message = JSON.parse(event.data);
+        } catch (_) {
+          return;
+        }
+
+        if (message.id === handshakeId) {
+          if (!message.ok && message.code === "PAIR_REQUIRED" && message.token) {
+            token = message.token;
+            await chrome.storage.local.set({ bridgeToken: token });
+            sendHello();
+            return;
+          }
+          if (!message.ok) {
+            finishReject(new Error(message.error || "TuneCord eşleşmesi başarısız."));
+            try { ws.close(); } catch (_) {}
+            return;
+          }
+          ws.__authenticated = true;
+          if (message.state) emitBridgeState(message.state);
+          badge("", null);
+          finishResolve(ws);
+          return;
+        }
+
+        if (message.type === "state" && message.state) {
+          emitBridgeState(message.state);
+          return;
+        }
+        if (message.type === "pair-reset") {
+          await chrome.storage.local.remove("bridgeToken");
+          return;
+        }
+
+        if (message.id && pending.has(message.id)) {
+          const entry = pending.get(message.id);
+          pending.delete(message.id);
+          clearTimeout(entry.timer);
+          if (message.ok === false) entry.reject(new Error(message.error || "TuneCord isteği başarısız."));
+          else entry.resolve(message);
+        }
+      };
+
+      ws.onerror = () => {
+        badge("!", "#d92d69");
+      };
+
+      ws.onclose = () => {
+        if (socket === ws) socket = null;
+        rejectPending(new Error("TuneCord WebSocket bağlantısı kapandı."));
+        badge("!", "#d92d69");
+        if (!ws.__authenticated) finishReject(new Error("TuneCord WebSocket bağlantısı kurulamadı."));
+      };
+    });
+  })();
 
   try {
-    const response = await fetch(`${BRIDGE}${path}`, {
-      ...options,
-      headers,
-      cache: "no-store"
-    });
-    if (response.status === 401 && retry) {
-      await pairBridge(true);
-      return bridgeFetch(path, options, false);
-    }
-    if (!response.ok) throw new Error(`Uygulama ${response.status} hatası verdi.`);
-    return response.json();
+    const connected = await connectPromise;
+    connectPromise = null;
+    return connected;
   } catch (error) {
-    await chrome.action.setBadgeText({ text: "!" });
-    await chrome.action.setBadgeBackgroundColor({ color: "#d92d69" });
+    connectPromise = null;
     throw error;
   }
+}
+
+async function bridgeRequest(type, payload = {}, forcePair = false) {
+  const ws = await ensureSocket(forcePair);
+  const id = `${Date.now()}-${++requestSeq}`;
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      pending.delete(id);
+      reject(new Error("TuneCord isteği zaman aşımına uğradı."));
+    }, 6000);
+    pending.set(id, { resolve, reject, timer });
+    try {
+      ws.send(JSON.stringify({ id, type, ...payload }));
+    } catch (error) {
+      pending.delete(id);
+      clearTimeout(timer);
+      reject(error);
+    }
+  });
+}
+
+async function getStatus(forcePair = false) {
+  const reply = await bridgeRequest("getStatus", {}, forcePair);
+  return reply.state || {};
 }
 
 async function sendTrack(track, tabId) {
   if (track.playing) {
     currentTabId = tabId;
     await chrome.storage.session.set({ currentTabId: tabId });
-    await bridgeFetch("/api/track", {
-      method: "POST",
-      body: JSON.stringify(track)
-    });
-    await chrome.action.setBadgeText({ text: "ON" });
-    await chrome.action.setBadgeBackgroundColor({ color: "#32c67a" });
+    await bridgeRequest("track", { track });
+    badge("ON", "#32c67a");
     return;
   }
 
@@ -58,8 +185,8 @@ async function sendTrack(track, tabId) {
   if (currentTabId !== tabId) return;
   currentTabId = null;
   await chrome.storage.session.remove("currentTabId");
-  await bridgeFetch("/api/stop", { method: "POST", body: "{}" });
-  await chrome.action.setBadgeText({ text: "" });
+  await bridgeRequest("stop");
+  badge("", null);
 }
 
 function extractAssignedJson(html) {
@@ -139,10 +266,7 @@ async function fetchPlaylistsFromSession() {
   const items = collectSessionPlaylists(extractAssignedJson(await response.text()));
   if (!items.length) throw new Error("Playlist bulunamadı. YouTube hesabına giriş yapıp tekrar dene.");
 
-  await bridgeFetch("/api/playlists", {
-    method: "POST",
-    body: JSON.stringify({ items })
-  });
+  await bridgeRequest("playlists", { items });
   await chrome.storage.local.set({ sessionConnected: true, lastPlaylistSync: Date.now() });
   return items;
 }
@@ -154,20 +278,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         await sendTrack(message.track, sender.tab?.id ?? -1);
         return { ok: true };
       case "getStatus":
-        return bridgeFetch("/api/status");
-      case "setControl":
-        return bridgeFetch("/api/control", {
-          method: "POST",
-          body: JSON.stringify(message.control || {})
-        });
+        return getStatus(false);
+      case "setControl": {
+        const reply = await bridgeRequest("setControl", { control: message.control || {} });
+        return reply.state || {};
+      }
       case "pair":
-        await pairBridge(true);
-        return bridgeFetch("/api/status");
+        return getStatus(true);
       case "syncSessionPlaylists":
         return { ok: true, items: await fetchPlaylistsFromSession() };
+      case "bridgeState":
+        return { ok: true };
       case "playlistState": {
         const local = await chrome.storage.local.get(["sessionConnected", "lastPlaylistSync"]);
-        return { ...local, extensionId: chrome.runtime.id };
+        return { ...local, extensionId: chrome.runtime.id, transport: "websocket" };
       }
       default:
         throw new Error("Bilinmeyen istek.");
@@ -185,17 +309,19 @@ chrome.tabs.onRemoved.addListener(async tabId => {
   currentTabId = null;
   await chrome.storage.session.remove("currentTabId");
   try {
-    await bridgeFetch("/api/stop", { method: "POST", body: "{}" });
-  } catch (_) {
-    // Uygulama kapalıysa sessizce geç.
-  }
+    await bridgeRequest("stop");
+  } catch (_) {}
 });
 
 chrome.runtime.onInstalled.addListener(async ({ reason }) => {
   if (reason === "install") chrome.runtime.openOptionsPage();
-  try {
-    await pairBridge(true);
-  } catch (_) {
-    // Uygulama daha sonra açıldığında popup yeniden eşleşir.
-  }
+  try { await ensureSocket(false); } catch (_) {}
 });
+
+setInterval(() => {
+  if (socket?.readyState === WebSocket.OPEN && socket.__authenticated) {
+    bridgeRequest("ping").catch(() => {});
+  }
+}, 20000);
+
+ensureSocket(false).catch(() => {});

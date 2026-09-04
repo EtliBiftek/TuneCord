@@ -21,14 +21,14 @@
       <div class="card panel">
         <div class="section-head">
           <div><span class="eyebrow">DISCORD</span><h2>Rich Presence</h2></div>
-          <span class="mini-pill">LOCAL RPC</span>
+          <span class="mini-pill">WEBSOCKET</span>
         </div>
-        <p>Discord Developer Portal'daki uygulamanın Application ID'sini kullan.</p>
+        <p>Discord Developer Portal'daki uygulamanın Application ID'sini kullan. Değişiklikler anında kaydedilir.</p>
         <label class="field">Application ID
           <input id="discordAppId" inputmode="numeric" placeholder="123456789012345678">
         </label>
         <label class="toggle-row inset">
-          <span><b>Discord'da göster</b><small>Şarkı bilgisini yayınla</small></span>
+          <span><b>Discord'da göster</b><small>Şarkı bilgisini anında yayınla/kapat</small></span>
           <input id="enabled" type="checkbox"><i class="switch"></i>
         </label>
       </div>
@@ -61,8 +61,7 @@
 
     <footer>
       <span id="extensionId"></span>
-      <span id="message"></span>
-      <button id="save" class="primary">Ayarları kaydet</button>
+      <span id="message">Değişiklikler otomatik kaydedilir · WebSocket</span>
     </footer>
   </main>
   <script src="options.js"></script>

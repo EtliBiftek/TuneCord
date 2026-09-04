@@ -13,10 +13,10 @@ function showError(message = "") {
 
 function render(status) {
   if (status.discordConnected) {
-    $("bridgeState").textContent = "Discord bağlı";
+    $("bridgeState").textContent = "Discord bağlı · WebSocket";
     $("bridgeState").classList.add("online");
   } else {
-    $("bridgeState").textContent = "Uygulama bağlı";
+    $("bridgeState").textContent = "Uygulama bağlı · WebSocket";
     $("bridgeState").classList.remove("online");
   }
 
@@ -63,6 +63,10 @@ for (const radio of document.querySelectorAll("input[name='mode']")) {
     }
   });
 }
+
+chrome.runtime.onMessage.addListener(message => {
+  if (message?.type === "bridgeState" && message.state) render(message.state);
+});
 
 $("retry").addEventListener("click", () => load(true));
 $("settings").addEventListener("click", () => chrome.runtime.openOptionsPage());

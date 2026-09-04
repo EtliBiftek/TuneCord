@@ -1,0 +1,17 @@
+.manual-guide {
+  margin: 20px auto 0;
+  max-width: 620px;
+  text-align: left;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: rgba(255,255,255,.018);
+}
+.manual-guide ol { margin: 14px 0 0; padding-left: 20px; color: var(--muted); font-size: 11px; line-height: 1.8; }
+.manual-guide b { color: var(--text); }
+.manual-guide code { color: #f19abd; font-family: "Cascadia Code", Consolas, monospace; font-size: 10px; }
+.path-box { display: grid; gap: 6px; padding: 11px 12px; border-radius: 12px; background: rgba(0,0,0,.24); border: 1px solid var(--line); }
+.path-box span { color: var(--muted-2); font-size: 9px; text-transform: uppercase; letter-spacing: .08em; }
+.path-box code { overflow-wrap: anywhere; user-select: all; }
+.permission-card code { color: #f19abd; font-family: "Cascadia Code", Consolas, monospace; font-size: 10px; }
+.button-row.single-action > * { flex: 0 1 auto; }

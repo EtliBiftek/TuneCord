@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>TuneCord</title>
   <link rel="stylesheet" href="desktop.css">
+  <link rel="stylesheet" href="desktop-extra.css">
 </head>
 <body class="desktop">
   <div class="titlebar" aria-hidden="true"></div>
@@ -24,7 +25,7 @@
         <div class="setup-copy">
           <span class="eyebrow">01 · TARAYICI</span>
           <h1>Hangi tarayıcıda dinliyorsun?</h1>
-          <p>TuneCord bilgisayarındaki Chromium tabanlı tarayıcıları tarar. Eklentiyi kuracağımız tarayıcıyı seç.</p>
+          <p>TuneCord bilgisayarındaki Chromium tabanlı tarayıcıları tarar. Eklentiyi kullanacağın tarayıcıyı seç.</p>
         </div>
         <div id="browserList" class="browser-list">
           <div class="scan-placeholder"><span class="spinner"></span> Tarayıcılar aranıyor…</div>
@@ -38,11 +39,11 @@
       <div id="setupStep2" class="setup-step" hidden>
         <div class="setup-copy">
           <span class="eyebrow">02 · EKLENTİ</span>
-          <h1>Eklentiyi kuralım mı?</h1>
+          <h1>Eklenti dosyalarını hazırlayalım.</h1>
           <p id="installDescription">TuneCord, YouTube ve YouTube Music'te çalan parçayı görebilmek için tarayıcı eklentisine ihtiyaç duyar.</p>
         </div>
         <div class="permission-card">
-          <div class="permission-icon">↗</div>
+          <div class="permission-icon">!</div>
           <div>
             <b>Eklenti gerekli</b>
             <p>Eklenti olmadan TuneCord tarayıcıdaki şarkıyı algılayamaz ve Discord Presence gönderemez.</p>
@@ -51,23 +52,33 @@
         <div class="permission-card soft">
           <div class="permission-icon">✓</div>
           <div>
-            <b>Kur dersen otomatik hazırlayacağız</b>
-            <p>Eklenti yerel TuneCord klasörüne kopyalanır ve seçtiğin tarayıcı eklenti yüklenmiş şekilde açılır. Tarayıcı güvenlik politikası ayrıca onay isterse yalnızca o onayı tamamlaman gerekir.</p>
+            <b>TuneCord dosyaları kendi hazırlayacak</b>
+            <p>Eklenti <code>%APPDATA%\TuneCord\extension</code> klasörüne kopyalanır. Tarayıcı güvenliği nedeniyle son “Load unpacked / Paketlenmemiş öğe yükle” onayı senden istenir.</p>
           </div>
         </div>
         <p id="installMessage" class="setup-message"></p>
         <div class="setup-actions three">
           <button id="setupBack" class="ghost">Geri</button>
           <button id="skipSetup" class="secondary">Eklentisiz devam et</button>
-          <button id="installExtension" class="primary">Eklentiyi kur</button>
+          <button id="installExtension" class="primary">Dosyaları hazırla</button>
         </div>
       </div>
 
       <div id="setupStep3" class="setup-step success-step" hidden>
         <div class="success-mark">✓</div>
-        <span class="eyebrow">03 · HAZIR</span>
-        <h1>Kurulum tamamlandı.</h1>
-        <p id="successText">Tarayıcı eklentiyle açıldı. YouTube'da bir şarkı başlattığında TuneCord otomatik algılayacak.</p>
+        <span class="eyebrow">03 · MANUEL ONAY</span>
+        <h1>Dosyalar hazır.</h1>
+        <p id="successText">Eklenti dosyaları hazırlandı.</p>
+        <div class="manual-guide">
+          <div class="path-box"><span>Eklenti klasörü</span><code id="extensionPathCode"></code></div>
+          <ol>
+            <li>Tarayıcıda <code id="extensionsUrlCode">chrome://extensions/</code> adresini aç.</li>
+            <li>Sağ üstten <b>Geliştirici modu / Developer mode</b> seçeneğini aç.</li>
+            <li><b>Paketlenmemiş öğe yükle / Load unpacked</b> düğmesine bas.</li>
+            <li>Yukarıdaki <b>TuneCord\extension</b> klasörünü seç.</li>
+            <li>YouTube veya YouTube Music sekmesini yenile.</li>
+          </ol>
+        </div>
         <div class="setup-actions center">
           <button id="finishSetup" class="primary large">TuneCord'u aç</button>
         </div>
@@ -86,9 +97,7 @@
     </header>
 
     <section class="now-card">
-      <div class="now-art">
-        <span class="music-note">♪</span>
-      </div>
+      <div class="now-art"><span class="music-note">♪</span></div>
       <div class="now-copy">
         <span class="eyebrow">ŞU AN ÇALIYOR</span>
         <strong id="trackTitle">Bir şey çalmıyor</strong>
@@ -104,6 +113,7 @@
       <section class="surface general-panel">
         <div class="section-head">
           <div><span class="eyebrow">GENEL</span><h2>Presence</h2></div>
+          <span class="mini-pill">OTOMATİK KAYIT</span>
         </div>
 
         <label class="setting-row">
@@ -120,11 +130,10 @@
           <input id="discordId" inputmode="numeric" maxlength="22" placeholder="123456789012345678">
         </label>
 
-        <div class="button-row">
-          <button id="reset" class="ghost">Eşleşmeyi sıfırla</button>
-          <button id="save" class="primary">Kaydet</button>
+        <div class="button-row single-action">
+          <button id="reset" class="ghost">WebSocket eşleşmesini sıfırla</button>
         </div>
-        <p id="message" class="form-message"></p>
+        <p id="message" class="form-message">Değişiklikler anında otomatik kaydedilir.</p>
         <p id="discordError" class="form-message bad"></p>
       </section>
 
@@ -142,7 +151,7 @@
           <div><span>Canlı bağlantı</span><b id="liveExtensionState">Yok</b></div>
         </div>
         <div class="button-row stack-mobile">
-          <button id="openBrowser" class="secondary">Tarayıcıyı eklentiyle aç</button>
+          <button id="openBrowser" class="secondary">Tarayıcıyı aç</button>
           <button id="rerunSetup" class="ghost">Kurulumu yeniden aç</button>
         </div>
       </section>

@@ -7,6 +7,9 @@ const path = require("path");
 const { spawn } = require("child_process");
 
 const PORT = 37645;
+const EXTENSION_ID = "mfhiohlcbedfhemkommfailjjfkdfobe";
+const WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+
 const DEFAULT_CONFIG = {
   enabled: true,
   selectedOnly: false,
@@ -33,6 +36,7 @@ let extensionSeenAt = 0;
 let config = { ...DEFAULT_CONFIG };
 let track = emptyTrack();
 let lastPresenceKey = null;
+const wsClients = new Set();
 
 function emptyTrack() {
   return {
@@ -70,7 +74,7 @@ function saveConfig() {
   try {
     app.setLoginItemSettings({ openAtLogin: Boolean(config.startup), args: ["--tray"] });
   } catch (_) {
-    // Portable yapılarda başlangıç kaydı desteklenmiyorsa ayarı yine de sakla.
+    // Portable yapılarda başlangıç kaydı desteklenmeyebilir.
   }
 }
 
@@ -85,6 +89,7 @@ function browserCandidates() {
       id: "brave",
       name: "Brave",
       accent: "#fb542b",
+      extensionsUrl: "brave://extensions/",
       paths: [
         path.join(local, "BraveSoftware", "Brave-Browser", "Application", "brave.exe"),
         path.join(pf, "BraveSoftware", "Brave-Browser", "Application", "brave.exe"),
@@ -95,6 +100,7 @@ function browserCandidates() {
       id: "chrome",
       name: "Google Chrome",
       accent: "#4285f4",
+      extensionsUrl: "chrome://extensions/",
       paths: [
         path.join(local, "Google", "Chrome", "Application", "chrome.exe"),
         path.join(pf, "Google", "Chrome", "Application", "chrome.exe"),
@@ -105,6 +111,7 @@ function browserCandidates() {
       id: "edge",
       name: "Microsoft Edge",
       accent: "#0aa7b5",
+      extensionsUrl: "edge://extensions/",
       paths: [
         path.join(pfx86, "Microsoft", "Edge", "Application", "msedge.exe"),
         path.join(pf, "Microsoft", "Edge", "Application", "msedge.exe"),
@@ -115,6 +122,7 @@ function browserCandidates() {
       id: "vivaldi",
       name: "Vivaldi",
       accent: "#ef3939",
+      extensionsUrl: "vivaldi://extensions/",
       paths: [
         path.join(local, "Vivaldi", "Application", "vivaldi.exe"),
         path.join(pf, "Vivaldi", "Application", "vivaldi.exe"),
@@ -125,6 +133,7 @@ function browserCandidates() {
       id: "opera-gx",
       name: "Opera GX",
       accent: "#ff1b6b",
+      extensionsUrl: "opera://extensions/",
       paths: [
         path.join(local, "Programs", "Opera GX", "opera.exe"),
         path.join(local, "Programs", "Opera GX", "launcher.exe"),
@@ -135,6 +144,7 @@ function browserCandidates() {
       id: "opera",
       name: "Opera",
       accent: "#ff1b2d",
+      extensionsUrl: "opera://extensions/",
       paths: [
         path.join(local, "Programs", "Opera", "opera.exe"),
         path.join(local, "Programs", "Opera", "launcher.exe")
@@ -144,6 +154,7 @@ function browserCandidates() {
       id: "chromium",
       name: "Chromium",
       accent: "#62a8e5",
+      extensionsUrl: "chrome://extensions/",
       paths: [
         path.join(local, "Chromium", "Application", "chrome.exe"),
         path.join(local, "Chromium", "Application", "chromium.exe"),
@@ -156,16 +167,20 @@ function browserCandidates() {
 function detectBrowsers() {
   const found = [];
   const seen = new Set();
-
   for (const browser of browserCandidates()) {
     const executable = browser.paths.find(candidate => candidate && fs.existsSync(candidate));
     if (!executable) continue;
     const key = executable.toLowerCase();
     if (seen.has(key)) continue;
     seen.add(key);
-    found.push({ id: browser.id, name: browser.name, path: executable, accent: browser.accent });
+    found.push({
+      id: browser.id,
+      name: browser.name,
+      path: executable,
+      accent: browser.accent,
+      extensionsUrl: browser.extensionsUrl
+    });
   }
-
   return found;
 }
 
@@ -176,7 +191,8 @@ function extensionSourcePath() {
 }
 
 function installedExtensionPath() {
-  return path.join(app.getPath("userData"), "browser-extension");
+  const roaming = process.env.APPDATA || app.getPath("appData");
+  return path.join(roaming, "TuneCord", "extension");
 }
 
 function copyExtensionFiles() {
@@ -189,15 +205,10 @@ function copyExtensionFiles() {
   return target;
 }
 
-function launchBrowserWithExtension(browser, extensionPath = installedExtensionPath()) {
+function spawnBrowser(browser, url) {
   if (!browser?.path || !fs.existsSync(browser.path)) throw new Error("Seçilen tarayıcı artık bulunamıyor.");
-  if (!fs.existsSync(extensionPath)) throw new Error("TuneCord eklenti klasörü bulunamadı.");
-
-  const child = spawn(browser.path, [
-    `--load-extension=${extensionPath}`,
-    "--new-window",
-    "https://www.youtube.com/"
-  ], {
+  const args = url ? ["--new-window", url] : [];
+  const child = spawn(browser.path, args, {
     detached: true,
     stdio: "ignore",
     windowsHide: false
@@ -205,21 +216,29 @@ function launchBrowserWithExtension(browser, extensionPath = installedExtensionP
   child.unref();
 }
 
-function installBrowserExtension(browserId) {
-  const browsers = detectBrowsers();
-  const browser = browsers.find(item => item.id === browserId);
+function prepareBrowserExtension(browserId) {
+  const browser = detectBrowsers().find(item => item.id === browserId);
   if (!browser) throw new Error("Seçtiğin Chromium tarayıcı bulunamadı. Yeniden tara.");
 
   const extensionPath = copyExtensionFiles();
-  launchBrowserWithExtension(browser, extensionPath);
-
   config.selectedBrowserId = browser.id;
   config.selectedBrowserPath = browser.path;
-  config.extensionInstalled = true;
+  config.extensionInstalled = true; // Dosyalar hazır; tarayıcıdaki son Load unpacked adımı kullanıcı onayı ister.
   config.setupComplete = true;
   saveConfig();
 
-  return { browser, extensionPath };
+  try {
+    spawnBrowser(browser, browser.extensionsUrl);
+  } catch (_) {
+    // İç sayfa açılamasa bile klasör hazırdır ve sihirbaz yolu gösterir.
+  }
+
+  return {
+    browser,
+    extensionPath,
+    manual: true,
+    extensionsUrl: browser.extensionsUrl
+  };
 }
 
 function selectedBrowserInfo() {
@@ -229,7 +248,8 @@ function selectedBrowserInfo() {
       id: config.selectedBrowserId,
       name: config.selectedBrowserId || "Chromium",
       path: config.selectedBrowserPath,
-      accent: "#d94683"
+      accent: "#d94683",
+      extensionsUrl: "chrome://extensions/"
     } : null);
 }
 
@@ -249,13 +269,284 @@ function status() {
     extensionConnected: Date.now() - extensionSeenAt < 35000,
     discordConnected,
     discordError,
+    transport: "websocket",
     track
   };
 }
 
+function wsFrame(payload, opcode = 1) {
+  const data = Buffer.isBuffer(payload) ? payload : Buffer.from(String(payload));
+  let header;
+  if (data.length < 126) {
+    header = Buffer.from([0x80 | opcode, data.length]);
+  } else if (data.length <= 0xffff) {
+    header = Buffer.alloc(4);
+    header[0] = 0x80 | opcode;
+    header[1] = 126;
+    header.writeUInt16BE(data.length, 2);
+  } else {
+    header = Buffer.alloc(10);
+    header[0] = 0x80 | opcode;
+    header[1] = 127;
+    header.writeBigUInt64BE(BigInt(data.length), 2);
+  }
+  return Buffer.concat([header, data]);
+}
+
+function wsSend(client, value) {
+  if (!client || client.socket.destroyed) return;
+  try {
+    client.socket.write(wsFrame(JSON.stringify(value)));
+  } catch (_) {
+    client.socket.destroy();
+  }
+}
+
+function wsBroadcastState() {
+  const snapshot = status();
+  for (const client of wsClients) {
+    if (client.authenticated) wsSend(client, { type: "state", state: snapshot });
+  }
+}
+
 function sendStatus() {
-  if (!mainWindow || mainWindow.isDestroyed()) return;
-  mainWindow.webContents.send("state", status());
+  const snapshot = status();
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("state", snapshot);
+  for (const client of wsClients) {
+    if (client.authenticated) wsSend(client, { type: "state", state: snapshot });
+  }
+}
+
+function wsReply(client, id, ok, value = {}) {
+  wsSend(client, { id, ok, ...value });
+}
+
+function applyControl(body = {}) {
+  const oldAppId = config.discordAppId;
+  if (typeof body.enabled === "boolean") config.enabled = body.enabled;
+  if (typeof body.selectedOnly === "boolean") config.selectedOnly = body.selectedOnly;
+  if (typeof body.startup === "boolean") config.startup = body.startup;
+  if (typeof body.discordAppId === "string") config.discordAppId = body.discordAppId.replace(/\s/g, "");
+  if (Array.isArray(body.selectedPlaylistIds)) {
+    config.selectedPlaylistIds = body.selectedPlaylistIds.map(String);
+  }
+  saveConfig();
+  if (oldAppId !== config.discordAppId) {
+    closeDiscord();
+    discordError = "";
+  }
+  lastPresenceKey = null;
+  processPresence();
+  sendStatus();
+  return status();
+}
+
+function applyPlaylists(items) {
+  config.playlists = (Array.isArray(items) ? items : [])
+    .map(item => ({ id: String(item.id || ""), title: String(item.title || item.id || "") }))
+    .filter(item => item.id);
+  config.selectedPlaylistIds = config.selectedPlaylistIds.filter(id => config.playlists.some(item => item.id === id));
+  saveConfig();
+  sendStatus();
+  return status();
+}
+
+function handleWsMessage(client, message) {
+  const id = message?.id;
+  const type = message?.type;
+
+  if (type === "hello") {
+    if (message.extensionId !== EXTENSION_ID) {
+      wsReply(client, id, false, { code: "BAD_EXTENSION", error: "Bu WebSocket yalnızca TuneCord eklentisine açıktır." });
+      client.socket.end(wsFrame("", 8));
+      return;
+    }
+    if (message.token !== config.bridgeToken) {
+      wsReply(client, id, false, { code: "PAIR_REQUIRED", token: config.bridgeToken });
+      return;
+    }
+    client.authenticated = true;
+    extensionSeenAt = Date.now();
+    wsReply(client, id, true, { state: status() });
+    sendStatus();
+    return;
+  }
+
+  if (!client.authenticated) {
+    wsReply(client, id, false, { code: "NOT_AUTHENTICATED", error: "Önce eşleşme gerekli." });
+    return;
+  }
+
+  extensionSeenAt = Date.now();
+  try {
+    switch (type) {
+      case "getStatus":
+        wsReply(client, id, true, { state: status() });
+        break;
+      case "track":
+        track = {
+          ...emptyTrack(),
+          ...(message.track || {}),
+          playing: Boolean(message.track?.playing),
+          duration: Number(message.track?.duration) || 0,
+          currentTime: Number(message.track?.currentTime) || 0
+        };
+        lastPresenceKey = null;
+        processPresence();
+        sendStatus();
+        wsReply(client, id, true, { state: status() });
+        break;
+      case "stop":
+        track = emptyTrack();
+        lastPresenceKey = null;
+        processPresence();
+        sendStatus();
+        wsReply(client, id, true, { state: status() });
+        break;
+      case "setControl":
+        wsReply(client, id, true, { state: applyControl(message.control || {}) });
+        break;
+      case "playlists":
+        wsReply(client, id, true, { state: applyPlaylists(message.items) });
+        break;
+      case "ping":
+        wsReply(client, id, true, { pong: Date.now() });
+        break;
+      default:
+        wsReply(client, id, false, { error: "Bilinmeyen WebSocket isteği." });
+    }
+  } catch (error) {
+    wsReply(client, id, false, { error: error.message || "WebSocket isteği başarısız." });
+  }
+}
+
+function consumeWsData(client, chunk) {
+  client.buffer = Buffer.concat([client.buffer, chunk]);
+  while (client.buffer.length >= 2) {
+    const first = client.buffer[0];
+    const second = client.buffer[1];
+    const fin = Boolean(first & 0x80);
+    const opcode = first & 0x0f;
+    const masked = Boolean(second & 0x80);
+    let length = second & 0x7f;
+    let offset = 2;
+
+    if (length === 126) {
+      if (client.buffer.length < 4) return;
+      length = client.buffer.readUInt16BE(2);
+      offset = 4;
+    } else if (length === 127) {
+      if (client.buffer.length < 10) return;
+      const bigLength = client.buffer.readBigUInt64BE(2);
+      if (bigLength > BigInt(4 * 1024 * 1024)) {
+        client.socket.destroy();
+        return;
+      }
+      length = Number(bigLength);
+      offset = 10;
+    }
+
+    if (!masked || length > 4 * 1024 * 1024) {
+      client.socket.destroy();
+      return;
+    }
+    if (client.buffer.length < offset + 4 + length) return;
+
+    const mask = client.buffer.subarray(offset, offset + 4);
+    offset += 4;
+    const payload = Buffer.from(client.buffer.subarray(offset, offset + length));
+    client.buffer = client.buffer.subarray(offset + length);
+    for (let i = 0; i < payload.length; i++) payload[i] ^= mask[i % 4];
+
+    if (opcode === 8) {
+      client.socket.end(wsFrame("", 8));
+      return;
+    }
+    if (opcode === 9) {
+      client.socket.write(wsFrame(payload, 10));
+      continue;
+    }
+    if (opcode === 10) continue;
+
+    if (opcode === 1) {
+      client.fragments = [payload];
+      client.fragmentOpcode = 1;
+    } else if (opcode === 0 && client.fragmentOpcode === 1) {
+      client.fragments.push(payload);
+    } else {
+      client.socket.destroy();
+      return;
+    }
+
+    if (!fin) continue;
+    const text = Buffer.concat(client.fragments).toString("utf8");
+    client.fragments = [];
+    client.fragmentOpcode = 0;
+    try {
+      handleWsMessage(client, JSON.parse(text));
+    } catch (_) {
+      wsReply(client, null, false, { error: "Geçersiz WebSocket JSON mesajı." });
+    }
+  }
+}
+
+function startBridge() {
+  server = http.createServer((request, response) => {
+    response.writeHead(426, { "Content-Type": "application/json; charset=utf-8" });
+    response.end(JSON.stringify({ error: "TuneCord bridge WebSocket kullanır." }));
+  });
+
+  server.on("upgrade", (request, socket) => {
+    let pathname = "";
+    try {
+      pathname = new URL(request.url, `http://127.0.0.1:${PORT}`).pathname;
+    } catch (_) {
+      socket.destroy();
+      return;
+    }
+    if (pathname !== "/ws") {
+      socket.destroy();
+      return;
+    }
+
+    const key = request.headers["sec-websocket-key"];
+    const upgrade = String(request.headers.upgrade || "").toLowerCase();
+    if (!key || upgrade !== "websocket") {
+      socket.destroy();
+      return;
+    }
+
+    const accept = crypto.createHash("sha1").update(key + WS_GUID).digest("base64");
+    socket.write([
+      "HTTP/1.1 101 Switching Protocols",
+      "Upgrade: websocket",
+      "Connection: Upgrade",
+      `Sec-WebSocket-Accept: ${accept}`,
+      "\r\n"
+    ].join("\r\n"));
+
+    const client = {
+      socket,
+      authenticated: false,
+      buffer: Buffer.alloc(0),
+      fragments: [],
+      fragmentOpcode: 0
+    };
+    wsClients.add(client);
+    socket.on("data", chunk => consumeWsData(client, chunk));
+    socket.on("error", () => {});
+    socket.on("close", () => {
+      wsClients.delete(client);
+      sendStatus();
+    });
+  });
+
+  server.listen(PORT, "127.0.0.1");
+  server.on("error", error => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("bridge-error", error.message);
+    }
+  });
 }
 
 function mayShowTrack() {
@@ -289,20 +580,16 @@ function discordErrorText(payload, fallback = "Discord RPC hatası.") {
 
 function handleDiscordFrame(socket, op, payload) {
   if (discord !== socket) return;
-
   if (op === 3) {
     if (!socket.destroyed) socket.write(discordFrame(4, payload));
     return;
   }
-
   if (op === 2) {
     discordError = discordErrorText(payload, "Discord IPC bağlantıyı kapattı.");
     socket.destroy();
     return;
   }
-
   if (op !== 1) return;
-
   if (payload?.evt === "READY") {
     discordReady = true;
     discordConnected = true;
@@ -312,7 +599,6 @@ function handleDiscordFrame(socket, op, payload) {
     processPresence();
     return;
   }
-
   if (payload?.evt === "ERROR") {
     discordError = discordErrorText(payload);
     sendStatus();
@@ -323,23 +609,18 @@ function handleDiscordFrame(socket, op, payload) {
 function consumeDiscordData(socket, chunk) {
   if (discord !== socket) return;
   discordReceiveBuffer = Buffer.concat([discordReceiveBuffer, chunk]);
-
   while (discordReceiveBuffer.length >= 8) {
     const op = discordReceiveBuffer.readInt32LE(0);
     const length = discordReceiveBuffer.readInt32LE(4);
-
     if (length < 0 || length > 4 * 1024 * 1024) {
       discordError = "Discord IPC geçersiz bir frame gönderdi.";
       sendStatus();
       socket.destroy();
       return;
     }
-
     if (discordReceiveBuffer.length < 8 + length) return;
-
     const payloadBytes = discordReceiveBuffer.subarray(8, 8 + length);
     discordReceiveBuffer = discordReceiveBuffer.subarray(8 + length);
-
     let payload = {};
     try {
       payload = payloadBytes.length ? JSON.parse(payloadBytes.toString("utf8")) : {};
@@ -349,7 +630,6 @@ function consumeDiscordData(socket, chunk) {
       socket.destroy();
       return;
     }
-
     handleDiscordFrame(socket, op, payload);
     if (discord !== socket || socket.destroyed) return;
   }
@@ -357,11 +637,9 @@ function consumeDiscordData(socket, chunk) {
 
 function connectDiscord() {
   if (!config.discordAppId || discord) return;
-
   let index = 0;
   const tryNext = () => {
     if (discord) return;
-
     if (index >= 10) {
       discordReady = false;
       discordConnected = false;
@@ -372,7 +650,6 @@ function connectDiscord() {
 
     const socket = net.createConnection(`\\\\?\\pipe\\discord-ipc-${index++}`);
     let connected = false;
-
     socket.once("connect", () => {
       connected = true;
       discord = socket;
@@ -381,7 +658,6 @@ function connectDiscord() {
       discordReceiveBuffer = Buffer.alloc(0);
       discordError = "";
       lastPresenceKey = null;
-
       socket.on("data", chunk => consumeDiscordData(socket, chunk));
       socket.on("close", () => {
         if (discord === socket) {
@@ -393,9 +669,7 @@ function connectDiscord() {
           sendStatus();
         }
       });
-
       socket.write(discordFrame(0, { v: 1, client_id: config.discordAppId }));
-
       setTimeout(() => {
         if (discord === socket && !discordReady && !socket.destroyed) {
           discordError = discordError || "Discord READY yanıtı gelmedi.";
@@ -404,21 +678,18 @@ function connectDiscord() {
         }
       }, 5000);
     });
-
     socket.on("error", error => {
       if (!connected) {
         socket.destroy();
         tryNext();
         return;
       }
-
       if (discord === socket) {
         discordError = error?.message || "Discord IPC bağlantı hatası.";
         sendStatus();
       }
     });
   };
-
   tryNext();
 }
 
@@ -433,17 +704,17 @@ function sendDiscordActivity(activity) {
 
 function processPresence() {
   const shouldShow = mayShowTrack();
-  const key = shouldShow ? `${config.discordAppId}\n${track.videoId}\n${track.title}\n${track.artist}\n${track.playlistId}` : "";
+  const key = shouldShow
+    ? `${config.discordAppId}\n${track.videoId}\n${track.title}\n${track.artist}\n${track.playlistId}`
+    : "";
 
   if (!config.discordAppId) {
     discordError = "";
     closeDiscord();
     return;
   }
-
   connectDiscord();
   if (!discord || !discordReady || key === lastPresenceKey) return;
-
   lastPresenceKey = key;
 
   if (!shouldShow) {
@@ -451,7 +722,7 @@ function processPresence() {
     return;
   }
 
-  const activity = {
+  sendDiscordActivity({
     type: 2,
     details: track.title.slice(0, 128),
     state: track.artist.slice(0, 128),
@@ -460,100 +731,6 @@ function processPresence() {
       end: Math.floor(Date.now() / 1000 - track.currentTime + track.duration)
     } : undefined,
     buttons: track.url ? [{ label: "YouTube'da Aç", url: track.url }] : undefined
-  };
-
-  sendDiscordActivity(activity);
-}
-
-function parseJson(request) {
-  return new Promise((resolve, reject) => {
-    let body = "";
-    request.on("data", chunk => {
-      body += chunk;
-      if (body.length > 1024 * 1024) request.destroy();
-    });
-    request.on("end", () => {
-      try {
-        resolve(body ? JSON.parse(body) : {});
-      } catch (_) {
-        reject(new Error("Geçersiz JSON"));
-      }
-    });
-  });
-}
-
-function respond(response, code, body) {
-  response.writeHead(code, {
-    "Content-Type": "application/json; charset=utf-8",
-    "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Headers": "Content-Type, X-TuneCord-Token"
-  });
-  response.end(JSON.stringify(body));
-}
-
-function authorized(request) {
-  return request.headers["x-tunecord-token"] === config.bridgeToken;
-}
-
-async function bridgeHandler(request, response) {
-  if (request.method === "OPTIONS") return respond(response, 204, {});
-  const url = new URL(request.url, `http://127.0.0.1:${PORT}`);
-  if (request.method === "GET" && url.pathname === "/api/pair") {
-    return respond(response, 200, { token: config.bridgeToken });
-  }
-  if (!authorized(request)) return respond(response, 401, { error: "Eşleşme gerekli." });
-  extensionSeenAt = Date.now();
-
-  try {
-    if (request.method === "GET" && url.pathname === "/api/status") return respond(response, 200, status());
-
-    const body = await parseJson(request);
-
-    if (request.method === "POST" && url.pathname === "/api/track") {
-      track = {
-        ...emptyTrack(),
-        ...body,
-        playing: Boolean(body.playing),
-        duration: Number(body.duration) || 0,
-        currentTime: Number(body.currentTime) || 0
-      };
-      lastPresenceKey = null;
-    } else if (request.method === "POST" && url.pathname === "/api/stop") {
-      track = emptyTrack();
-      lastPresenceKey = null;
-    } else if (request.method === "POST" && url.pathname === "/api/control") {
-      if (typeof body.enabled === "boolean") config.enabled = body.enabled;
-      if (typeof body.selectedOnly === "boolean") config.selectedOnly = body.selectedOnly;
-      if (typeof body.discordAppId === "string") config.discordAppId = body.discordAppId.replace(/\s/g, "");
-      if (Array.isArray(body.selectedPlaylistIds)) config.selectedPlaylistIds = body.selectedPlaylistIds;
-      saveConfig();
-      lastPresenceKey = null;
-    } else if (request.method === "POST" && url.pathname === "/api/playlists") {
-      const items = Array.isArray(body.items) ? body.items : [];
-      config.playlists = items
-        .map(item => ({ id: String(item.id || ""), title: String(item.title || item.id || "") }))
-        .filter(item => item.id);
-      config.selectedPlaylistIds = config.selectedPlaylistIds.filter(id => config.playlists.some(item => item.id === id));
-      saveConfig();
-    } else {
-      return respond(response, 404, { error: "Bulunamadı." });
-    }
-
-    processPresence();
-    sendStatus();
-    respond(response, 200, status());
-  } catch (error) {
-    respond(response, 400, { error: error.message });
-  }
-}
-
-function startBridge() {
-  server = http.createServer(bridgeHandler);
-  server.listen(PORT, "127.0.0.1");
-  server.on("error", error => {
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send("bridge-error", error.message);
-    }
   });
 }
 
@@ -574,18 +751,11 @@ function createTray() {
       label: "Discord'da göster",
       type: "checkbox",
       checked: config.enabled,
-      click: item => {
-        config.enabled = item.checked;
-        saveConfig();
-        lastPresenceKey = null;
-        processPresence();
-        sendStatus();
-      }
+      click: item => applyControl({ enabled: item.checked })
     },
     { type: "separator" },
     { label: "Çıkış", click: () => { app.isQuitting = true; app.quit(); } }
   ]));
-
   refresh();
   tray.on("click", showWindow);
   setInterval(refresh, 1500);
@@ -607,7 +777,6 @@ function createWindow() {
       nodeIntegration: false
     }
   });
-
   mainWindow.loadFile(path.join(__dirname, "index.html"));
   mainWindow.on("close", event => {
     if (!app.isQuitting) {
@@ -621,15 +790,14 @@ function createWindow() {
 ipcMain.handle("state", () => status());
 ipcMain.handle("scan-browsers", () => detectBrowsers());
 ipcMain.handle("install-extension", (_, browserId) => {
-  const result = installBrowserExtension(String(browserId || ""));
+  const result = prepareBrowserExtension(String(browserId || ""));
   sendStatus();
   return { ...result, state: status() };
 });
 ipcMain.handle("launch-browser", () => {
   const browser = selectedBrowserInfo();
   if (!browser) throw new Error("Önce bir Chromium tarayıcı seç.");
-  if (!fs.existsSync(installedExtensionPath())) copyExtensionFiles();
-  launchBrowserWithExtension(browser);
+  spawnBrowser(browser, "https://www.youtube.com/");
   return { ok: true };
 });
 ipcMain.handle("skip-setup", () => {
@@ -645,23 +813,14 @@ ipcMain.handle("reset-setup", () => {
   sendStatus();
   return status();
 });
-ipcMain.handle("save", (_, next) => {
-  if (typeof next.enabled === "boolean") config.enabled = next.enabled;
-  if (typeof next.selectedOnly === "boolean") config.selectedOnly = next.selectedOnly;
-  if (typeof next.startup === "boolean") config.startup = next.startup;
-  if (typeof next.discordAppId === "string") config.discordAppId = next.discordAppId.replace(/\s/g, "");
-  if (Array.isArray(next.selectedPlaylistIds)) config.selectedPlaylistIds = next.selectedPlaylistIds;
-  saveConfig();
-  closeDiscord();
-  discordError = "";
-  lastPresenceKey = null;
-  processPresence();
-  sendStatus();
-  return status();
-});
+ipcMain.handle("save", (_, next) => applyControl(next || {}));
 ipcMain.handle("reset-pairing", () => {
   config.bridgeToken = crypto.randomBytes(24).toString("hex");
   saveConfig();
+  for (const client of wsClients) {
+    wsSend(client, { type: "pair-reset" });
+    client.socket.end(wsFrame("", 8));
+  }
   return { token: config.bridgeToken };
 });
 ipcMain.handle("window", (_, action) => {
@@ -688,6 +847,8 @@ app.whenReady().then(() => {
 
 app.on("before-quit", () => {
   app.isQuitting = true;
+  for (const client of wsClients) client.socket.destroy();
+  wsClients.clear();
   if (server) server.close();
   closeDiscord();
 });
