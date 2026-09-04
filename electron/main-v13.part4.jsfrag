@@ -1,0 +1,31 @@
+
+// Internal browser pages (chrome://, brave://, edge://, about:...) are more
+// reliable when they are passed as the only navigation argument. Some
+// Chromium-based browsers can otherwise open an about:blank window when
+// --new-window is combined with an internal URL.
+const INTERNAL_BROWSER_URL = /^(?:chrome|brave|edge|vivaldi|opera|about):/i;
+const spawnBrowserWithWindowFlag = spawnBrowser;
+
+spawnBrowser = function openSelectedBrowserPage(browser, url) {
+  if (!browser?.path || !fs.existsSync(browser.path)) {
+    throw new Error("Seçilen tarayıcı artık bulunamıyor.");
+  }
+
+  const args = [];
+  if (url) {
+    if (INTERNAL_BROWSER_URL.test(url)) {
+      args.push(url);
+    } else if (browser.family === "firefox") {
+      args.push("-new-window", url);
+    } else {
+      args.push("--new-window", url);
+    }
+  }
+
+  const child = spawn(browser.path, args, {
+    detached: true,
+    stdio: "ignore",
+    windowsHide: false
+  });
+  child.unref();
+};
