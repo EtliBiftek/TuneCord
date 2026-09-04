@@ -3,21 +3,26 @@
   "name": "TuneCord - YouTube Discord Presence",
   "description": "YouTube ve YouTube Music'te dinlediğin parçayı TuneCord üzerinden Discord'da gösterir.",
   "version": "1.3.0",
-  "minimum_chrome_version": "116",
-  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAvKnH2eGbriLBdGxX8JUvlyWYRpk10hIi4BeLjwG4anBbGFjdtYB3JvTRGWQpWd/ZnlnYTC2dq+x8aCzxWpintcFk1JmkzYW+dYzpIyA8BYzZyvaW7lUJuQ92iEFcqt8X9HIwrEWNNB3jjDrHxMo1L1+tOcgS2ew9uoOQczguNHeLmSf/fQQ97YUfHl5+Ed18PvLw+tbk77syy4+VC4OkhbZ+w/BIYRVE4cbOlSalcIJSwR42i8Q5eopCdyqzlvLHo1/fsitpI4p4+SQ87ddVwAhKb8nGzHxaMIg5TNVs2ISAeeXYjelPigKIy2N00klYyulTSgsluUYXtQOuEl3AtwIDAQAB",
   "permissions": ["storage"],
   "host_permissions": ["https://www.youtube.com/*", "https://music.youtube.com/*"],
-  "background": {"service_worker": "background.js"},
+  "background": {"scripts": ["background.js"]},
   "action": {
     "default_title": "TuneCord",
     "default_popup": "popup.html",
     "default_icon": {"16":"icons/icon16.png","32":"icons/icon32.png","48":"icons/icon48.png","128":"icons/icon128.png"}
   },
   "icons": {"16":"icons/icon16.png","32":"icons/icon32.png","48":"icons/icon48.png","128":"icons/icon128.png"},
-  "options_page": "options.html",
+  "options_ui": {"page":"options.html","open_in_tab":true},
   "content_scripts": [{
     "matches": ["https://www.youtube.com/*", "https://music.youtube.com/*"],
     "js": ["content.js"],
     "run_at": "document_idle"
-  }]
+  }],
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "tunecord@etlibiftek.local",
+      "strict_min_version": "115.0",
+      "data_collection_permissions": {"required": ["none"]}
+    }
+  }
 }

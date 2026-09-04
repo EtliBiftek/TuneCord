@@ -1,0 +1,247 @@
+    if (payload?.evt === "READY" && generation === discordGeneration && !discordReady) {
+      discord = candidate.socket;
+      discordReady = true;
+      discordConnected = true;
+      discordConnecting = false;
+      discordFailureCount = 0;
+      discordCandidateError = "";
+      discordError = "";
+      lastPresenceKey = null;
+      if (discordAttemptTimer) clearTimeout(discordAttemptTimer);
+      discordAttemptTimer = null;
+      destroyDiscordCandidates(candidate.socket);
+      discordCandidates.delete(candidate);
+      sendStatus();
+      processPresence();
+      return;
+    }
+  }
+}
+
+function connectDiscord(force = false) {
+  if (!config.discordAppId) return;
+  if (discordReady && discord && !discord.destroyed) return;
+  if (discordConnecting && !force) return;
+
+  if (force) {
+    discordGeneration++;
+    destroyDiscordCandidates();
+    if (discordAttemptTimer) clearTimeout(discordAttemptTimer);
+    discordAttemptTimer = null;
+  }
+
+  const generation = ++discordGeneration;
+  discordConnecting = true;
+  discordConnected = false;
+  discordCandidateError = "";
+  sendStatus();
+  let closedCount = 0;
+
+  const onCandidateClosed = candidate => {
+    discordCandidates.delete(candidate);
+    closedCount++;
+    if (generation === discordGeneration && !discordReady && closedCount >= DISCORD_PIPE_COUNT) finishDiscordAttemptFailure(generation);
+  };
+
+  for (let index = 0; index < DISCORD_PIPE_COUNT; index++) {
+    const socket = net.createConnection(`\\\\?\\pipe\\discord-ipc-${index}`);
+    const candidate = { socket, buffer: Buffer.alloc(0), connected: false };
+    discordCandidates.add(candidate);
+    socket.once("connect", () => {
+      candidate.connected = true;
+      if (generation !== discordGeneration || discordReady) return socket.destroy();
+      socket.write(discordFrame(0, { v: 1, client_id: config.discordAppId }));
+    });
+    socket.on("data", chunk => consumeDiscordCandidate(candidate, chunk, generation));
+    socket.on("error", error => {
+      if (candidate.connected && !discordCandidateError) discordCandidateError = error?.message || "Discord IPC bağlantı hatası.";
+    });
+    socket.once("close", () => {
+      if (socket === discord) {
+        discord = null;
+        discordReady = false;
+        discordConnected = false;
+        lastPresenceKey = null;
+        sendStatus();
+        scheduleDiscordReconnect(180);
+        return;
+      }
+      onCandidateClosed(candidate);
+    });
+  }
+
+  discordAttemptTimer = setTimeout(() => finishDiscordAttemptFailure(generation), DISCORD_ATTEMPT_TIMEOUT);
+}
+
+function sendDiscordActivity(activity) {
+  if (!discord || discord.destroyed || !discordReady) return;
+  try {
+    discord.write(discordFrame(1, {
+      cmd: "SET_ACTIVITY",
+      nonce: crypto.randomUUID(),
+      args: { pid: process.pid, activity }
+    }));
+  } catch (_) {
+    if (!discord.destroyed) discord.destroy();
+  }
+}
+
+function processPresence() {
+  const shouldShow = mayShowTrack();
+  const key = shouldShow
+    ? `${config.discordAppId}\n${track.videoId}\n${track.title}\n${track.artist}\n${track.playlistId}\n${track.thumbnail}`
+    : "";
+
+  if (!config.discordAppId) {
+    discordError = "";
+    closeDiscord();
+    return;
+  }
+
+  connectDiscord();
+  if (!discord || !discordReady || key === lastPresenceKey) return;
+  lastPresenceKey = key;
+
+  if (!shouldShow) {
+    sendDiscordActivity(null);
+    return;
+  }
+
+  const thumbnail = typeof track.thumbnail === "string" && /^https:\/\//i.test(track.thumbnail)
+    ? track.thumbnail.slice(0, 300)
+    : "";
+
+  sendDiscordActivity({
+    type: 2,
+    details: track.title.slice(0, 128),
+    state: track.artist.slice(0, 128),
+    timestamps: track.duration > 0 ? {
+      start: Math.floor(Date.now() / 1000 - track.currentTime),
+      end: Math.floor(Date.now() / 1000 - track.currentTime + track.duration)
+    } : undefined,
+    assets: thumbnail ? {
+      large_image: thumbnail,
+      large_text: (track.title || "YouTube").slice(0, 128)
+    } : undefined,
+    buttons: track.url ? [{ label: "YouTube'da Aç", url: track.url }] : undefined
+  });
+}
+
+function showWindow() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  mainWindow.show();
+  mainWindow.focus();
+}
+
+function createTray() {
+  let trayImage = nativeImage.createFromPath(appIconPath());
+  if (trayImage.isEmpty()) {
+    const fallback = `<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32"><rect width="32" height="32" rx="8" fill="#1a1022"/><text x="16" y="21" text-anchor="middle" font-size="13" font-family="Arial" font-weight="700" fill="#ee3fa6">TC</text></svg>`;
+    trayImage = nativeImage.createFromDataURL(`data:image/svg+xml;base64,${Buffer.from(fallback).toString("base64")}`);
+  }
+  tray = new Tray(trayImage.resize({ width: 20, height: 20 }));
+  tray.setToolTip("TuneCord");
+  const refresh = () => tray.setContextMenu(Menu.buildFromTemplate([
+    { label: "TuneCord'u aç", click: showWindow },
+    { label: "Discord'da göster", type: "checkbox", checked: config.enabled, click: item => applyControl({ enabled: item.checked }) },
+    { type: "separator" },
+    { label: "Çıkış", click: () => { app.isQuitting = true; app.quit(); } }
+  ]));
+  refresh();
+  tray.on("click", showWindow);
+  setInterval(refresh, 1500);
+}
+
+function createWindow() {
+  mainWindow = new BrowserWindow({
+    width: 980,
+    height: 760,
+    minWidth: 820,
+    minHeight: 640,
+    show: false,
+    backgroundColor: "#0b090f",
+    icon: appIconPath(),
+    titleBarStyle: "hidden",
+    titleBarOverlay: { color: "#0b090f", symbolColor: "#f7f3f6", height: 34 },
+    webPreferences: {
+      preload: path.join(__dirname, "preload.js"),
+      contextIsolation: true,
+      nodeIntegration: false
+    }
+  });
+  mainWindow.loadFile(path.join(__dirname, "index.html"));
+  mainWindow.on("close", event => {
+    if (!app.isQuitting) {
+      event.preventDefault();
+      mainWindow.hide();
+    }
+  });
+  mainWindow.webContents.on("did-finish-load", sendStatus);
+}
+
+ipcMain.handle("state", () => status());
+ipcMain.handle("scan-browsers", () => detectBrowsers());
+ipcMain.handle("install-extension", (_, browserId) => {
+  const result = prepareBrowserExtension(String(browserId || ""));
+  sendStatus();
+  return { ...result, state: status() };
+});
+ipcMain.handle("launch-browser", () => {
+  const browser = selectedBrowserInfo();
+  if (!browser) throw new Error("Önce bir tarayıcı seç.");
+  spawnBrowser(browser, "https://www.youtube.com/");
+  return { ok: true };
+});
+ipcMain.handle("skip-setup", () => {
+  config.setupComplete = true;
+  config.extensionInstalled = false;
+  saveConfig();
+  sendStatus();
+  return status();
+});
+ipcMain.handle("reset-setup", () => {
+  config.setupComplete = false;
+  saveConfig();
+  sendStatus();
+  return status();
+});
+ipcMain.handle("save", (_, next) => applyControl(next || {}));
+ipcMain.handle("reset-pairing", () => {
+  config.bridgeToken = crypto.randomBytes(24).toString("hex");
+  saveConfig();
+  for (const client of wsClients) {
+    wsSend(client, { type: "pair-reset" });
+    client.socket.end(wsFrame("", 8));
+  }
+  return { token: config.bridgeToken };
+});
+ipcMain.handle("window", (_, action) => {
+  if (action === "minimize") mainWindow.minimize();
+  if (action === "close") mainWindow.hide();
+});
+
+const gotLock = app.requestSingleInstanceLock();
+if (!gotLock) app.quit();
+app.on("second-instance", showWindow);
+app.whenReady().then(() => {
+  app.setAppUserModelId("com.tunecord.desktop");
+  loadConfig();
+  createWindow();
+  createTray();
+  startBridge();
+  saveConfig();
+  if (config.discordAppId) connectDiscord(true);
+  setInterval(() => {
+    processPresence();
+    sendStatus();
+  }, 5000);
+  if (!process.argv.includes("--tray") || !config.setupComplete) showWindow();
+});
+
+app.on("before-quit", () => {
+  app.isQuitting = true;
+  for (const client of wsClients) client.socket.destroy();
+  wsClients.clear();
+  if (server) server.close();
+  closeDiscord();
+});

@@ -1,0 +1,259 @@
+const { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain } = require("electron");
+const http = require("http");
+const net = require("net");
+const crypto = require("crypto");
+const fs = require("fs");
+const path = require("path");
+const { spawn } = require("child_process");
+
+const PORT = 37645;
+const WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+const DEFAULT_DISCORD_APP_ID = "1545256357727576124";
+const CHROMIUM_EXTENSION_ID = "mfhiohlcbedfhemkommfailjjfkdfobe";
+const FIREFOX_EXTENSION_ID = "tunecord@etlibiftek.local";
+const ALLOWED_EXTENSION_IDS = new Set([CHROMIUM_EXTENSION_ID, FIREFOX_EXTENSION_ID]);
+const DISCORD_PIPE_COUNT = 10;
+const DISCORD_ATTEMPT_TIMEOUT = 1600;
+
+const DEFAULT_CONFIG = {
+  enabled: true,
+  selectedOnly: false,
+  discordAppId: DEFAULT_DISCORD_APP_ID,
+  bridgeToken: "",
+  selectedPlaylistIds: [],
+  playlists: [],
+  startup: false,
+  setupComplete: false,
+  selectedBrowserId: "",
+  selectedBrowserPath: "",
+  selectedBrowserFamily: "chromium",
+  extensionInstalled: false
+};
+
+let mainWindow;
+let tray;
+let server;
+let config = { ...DEFAULT_CONFIG };
+let track = emptyTrack();
+let extensionSeenAt = 0;
+let lastPresenceKey = null;
+const wsClients = new Set();
+
+let discord = null;
+let discordReady = false;
+let discordConnected = false;
+let discordConnecting = false;
+let discordError = "";
+let discordGeneration = 0;
+let discordFailureCount = 0;
+let discordRetryTimer = null;
+let discordAttemptTimer = null;
+let discordCandidateError = "";
+const discordCandidates = new Set();
+
+function emptyTrack() {
+  return {
+    title: "",
+    artist: "",
+    videoId: "",
+    playlistId: "",
+    url: "",
+    thumbnail: "",
+    duration: 0,
+    currentTime: 0,
+    playing: false,
+    source: ""
+  };
+}
+
+function configPath() {
+  return path.join(app.getPath("userData"), "config.json");
+}
+
+function appIconPath() {
+  const packaged = path.join(process.resourcesPath, "tunecord-icon.png");
+  if (app.isPackaged && fs.existsSync(packaged)) return packaged;
+  return path.join(__dirname, "assets", "icon.png");
+}
+
+function loadConfig() {
+  try {
+    config = { ...DEFAULT_CONFIG, ...JSON.parse(fs.readFileSync(configPath(), "utf8")) };
+  } catch (_) {
+    config = { ...DEFAULT_CONFIG };
+  }
+  if (!config.discordAppId) config.discordAppId = DEFAULT_DISCORD_APP_ID;
+  if (!config.bridgeToken) config.bridgeToken = crypto.randomBytes(24).toString("hex");
+  if (!Array.isArray(config.playlists)) config.playlists = [];
+  if (!Array.isArray(config.selectedPlaylistIds)) config.selectedPlaylistIds = [];
+  if (!config.selectedBrowserFamily) config.selectedBrowserFamily = browserFamilyFromId(config.selectedBrowserId);
+}
+
+function saveConfig() {
+  fs.mkdirSync(path.dirname(configPath()), { recursive: true });
+  fs.writeFileSync(configPath(), JSON.stringify(config, null, 2), "utf8");
+  try {
+    app.setLoginItemSettings({ openAtLogin: Boolean(config.startup), args: ["--tray"] });
+  } catch (_) {}
+}
+
+function browserFamilyFromId(id = "") {
+  return ["firefox", "firefox-developer", "librewolf", "waterfox", "floorp", "zen"].includes(id) ? "firefox" : "chromium";
+}
+
+function browserCandidates() {
+  const local = process.env.LOCALAPPDATA || "";
+  const pf = process.env.PROGRAMFILES || "";
+  const pfx86 = process.env["PROGRAMFILES(X86)"] || "";
+  const roaming = process.env.APPDATA || "";
+  return [
+    { id: "brave", family: "chromium", name: "Brave", accent: "#fb542b", extensionsUrl: "brave://extensions/", paths: [
+      path.join(local, "BraveSoftware", "Brave-Browser", "Application", "brave.exe"),
+      path.join(pf, "BraveSoftware", "Brave-Browser", "Application", "brave.exe"),
+      path.join(pfx86, "BraveSoftware", "Brave-Browser", "Application", "brave.exe")
+    ]},
+    { id: "chrome", family: "chromium", name: "Google Chrome", accent: "#4285f4", extensionsUrl: "chrome://extensions/", paths: [
+      path.join(local, "Google", "Chrome", "Application", "chrome.exe"),
+      path.join(pf, "Google", "Chrome", "Application", "chrome.exe"),
+      path.join(pfx86, "Google", "Chrome", "Application", "chrome.exe")
+    ]},
+    { id: "edge", family: "chromium", name: "Microsoft Edge", accent: "#0aa7b5", extensionsUrl: "edge://extensions/", paths: [
+      path.join(pfx86, "Microsoft", "Edge", "Application", "msedge.exe"),
+      path.join(pf, "Microsoft", "Edge", "Application", "msedge.exe"),
+      path.join(local, "Microsoft", "Edge", "Application", "msedge.exe")
+    ]},
+    { id: "vivaldi", family: "chromium", name: "Vivaldi", accent: "#ef3939", extensionsUrl: "vivaldi://extensions/", paths: [
+      path.join(local, "Vivaldi", "Application", "vivaldi.exe"), path.join(pf, "Vivaldi", "Application", "vivaldi.exe"), path.join(pfx86, "Vivaldi", "Application", "vivaldi.exe")
+    ]},
+    { id: "opera-gx", family: "chromium", name: "Opera GX", accent: "#ff1b6b", extensionsUrl: "opera://extensions/", paths: [
+      path.join(local, "Programs", "Opera GX", "opera.exe"), path.join(local, "Programs", "Opera GX", "launcher.exe"), path.join(roaming, "Opera Software", "Opera GX Stable", "opera.exe")
+    ]},
+    { id: "opera", family: "chromium", name: "Opera", accent: "#ff1b2d", extensionsUrl: "opera://extensions/", paths: [
+      path.join(local, "Programs", "Opera", "opera.exe"), path.join(local, "Programs", "Opera", "launcher.exe")
+    ]},
+    { id: "chromium", family: "chromium", name: "Chromium", accent: "#62a8e5", extensionsUrl: "chrome://extensions/", paths: [
+      path.join(local, "Chromium", "Application", "chrome.exe"), path.join(local, "Chromium", "Application", "chromium.exe"), path.join(pf, "Chromium", "Application", "chrome.exe")
+    ]},
+    { id: "firefox", family: "firefox", name: "Mozilla Firefox", accent: "#ff7139", extensionsUrl: "about:debugging#/runtime/this-firefox", paths: [
+      path.join(pf, "Mozilla Firefox", "firefox.exe"), path.join(pfx86, "Mozilla Firefox", "firefox.exe"), path.join(local, "Mozilla Firefox", "firefox.exe")
+    ]},
+    { id: "firefox-developer", family: "firefox", name: "Firefox Developer Edition", accent: "#7542e5", extensionsUrl: "about:debugging#/runtime/this-firefox", paths: [
+      path.join(pf, "Firefox Developer Edition", "firefox.exe"), path.join(pfx86, "Firefox Developer Edition", "firefox.exe")
+    ]},
+    { id: "librewolf", family: "firefox", name: "LibreWolf", accent: "#6aa6d9", extensionsUrl: "about:debugging#/runtime/this-firefox", paths: [
+      path.join(pf, "LibreWolf", "librewolf.exe"), path.join(pfx86, "LibreWolf", "librewolf.exe"), path.join(local, "Programs", "LibreWolf", "librewolf.exe")
+    ]},
+    { id: "waterfox", family: "firefox", name: "Waterfox", accent: "#4d8cff", extensionsUrl: "about:debugging#/runtime/this-firefox", paths: [
+      path.join(pf, "Waterfox", "waterfox.exe"), path.join(pfx86, "Waterfox", "waterfox.exe"), path.join(local, "Waterfox", "waterfox.exe")
+    ]},
+    { id: "floorp", family: "firefox", name: "Floorp", accent: "#6c8cff", extensionsUrl: "about:debugging#/runtime/this-firefox", paths: [
+      path.join(pf, "Ablaze Floorp", "floorp.exe"), path.join(pf, "Floorp", "floorp.exe"), path.join(local, "Programs", "Floorp", "floorp.exe")
+    ]},
+    { id: "zen", family: "firefox", name: "Zen Browser", accent: "#9d7cff", extensionsUrl: "about:debugging#/runtime/this-firefox", paths: [
+      path.join(local, "Programs", "Zen Browser", "zen.exe"), path.join(pf, "Zen Browser", "zen.exe"), path.join(pf, "Zen", "zen.exe")
+    ]}
+  ];
+}
+
+function detectBrowsers() {
+  const found = [];
+  const seen = new Set();
+  for (const browser of browserCandidates()) {
+    const executable = browser.paths.find(candidate => candidate && fs.existsSync(candidate));
+    if (!executable) continue;
+    const key = executable.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    found.push({ id: browser.id, family: browser.family, name: browser.name, path: executable, accent: browser.accent, extensionsUrl: browser.extensionsUrl });
+  }
+  return found;
+}
+
+function extensionSourcePath(family) {
+  const folder = family === "firefox" ? "extension-firefox" : "extension";
+  const packaged = path.join(process.resourcesPath, folder);
+  if (app.isPackaged && fs.existsSync(packaged)) return packaged;
+  return path.join(app.getAppPath(), folder);
+}
+
+function installedExtensionPath(family = config.selectedBrowserFamily || "chromium") {
+  const roaming = process.env.APPDATA || app.getPath("appData");
+  return path.join(roaming, "TuneCord", family === "firefox" ? "extension-firefox" : "extension");
+}
+
+function copyExtensionFiles(family) {
+  const source = extensionSourcePath(family);
+  const target = installedExtensionPath(family);
+  if (!fs.existsSync(source)) throw new Error("Paket içindeki TuneCord eklentisi bulunamadı.");
+  fs.rmSync(target, { recursive: true, force: true });
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.cpSync(source, target, { recursive: true });
+  return target;
+}
+
+function spawnBrowser(browser, url) {
+  if (!browser?.path || !fs.existsSync(browser.path)) throw new Error("Seçilen tarayıcı artık bulunamıyor.");
+  const args = url ? ["-new-window", url] : [];
+  if (browser.family === "chromium") args[0] = "--new-window";
+  const child = spawn(browser.path, args, { detached: true, stdio: "ignore", windowsHide: false });
+  child.unref();
+}
+
+function prepareBrowserExtension(browserId) {
+  const browser = detectBrowsers().find(item => item.id === browserId);
+  if (!browser) throw new Error("Seçtiğin tarayıcı bulunamadı. Yeniden tara.");
+  const extensionPath = copyExtensionFiles(browser.family);
+  config.selectedBrowserId = browser.id;
+  config.selectedBrowserPath = browser.path;
+  config.selectedBrowserFamily = browser.family;
+  config.extensionInstalled = true;
+  config.setupComplete = true;
+  saveConfig();
+  try { spawnBrowser(browser, browser.extensionsUrl); } catch (_) {}
+  return {
+    browser,
+    family: browser.family,
+    extensionPath,
+    manifestPath: path.join(extensionPath, "manifest.json"),
+    extensionsUrl: browser.extensionsUrl,
+    temporary: browser.family === "firefox"
+  };
+}
+
+function selectedBrowserInfo() {
+  const detected = detectBrowsers();
+  return detected.find(item => item.id === config.selectedBrowserId) || (config.selectedBrowserPath ? {
+    id: config.selectedBrowserId,
+    family: config.selectedBrowserFamily || browserFamilyFromId(config.selectedBrowserId),
+    name: config.selectedBrowserId || "Tarayıcı",
+    path: config.selectedBrowserPath,
+    accent: "#d94683",
+    extensionsUrl: (config.selectedBrowserFamily === "firefox") ? "about:debugging#/runtime/this-firefox" : "chrome://extensions/"
+  } : null);
+}
+
+function status() {
+  const browser = selectedBrowserInfo();
+  const family = browser?.family || config.selectedBrowserFamily || "chromium";
+  return {
+    enabled: config.enabled,
+    selectedOnly: config.selectedOnly,
+    discordAppId: config.discordAppId,
+    defaultDiscordAppId: DEFAULT_DISCORD_APP_ID,
+    playlists: config.playlists,
+    selectedPlaylistIds: config.selectedPlaylistIds,
+    startup: config.startup,
+    setupComplete: config.setupComplete,
+    selectedBrowserId: config.selectedBrowserId,
+    selectedBrowser: browser,
+    extensionInstalled: Boolean(config.extensionInstalled && fs.existsSync(installedExtensionPath(family))),
+    extensionPath: installedExtensionPath(family),
+    extensionConnected: Date.now() - extensionSeenAt < 35000,
+    discordConnected,
+    discordConnecting,
+    discordError,
+    transport: "websocket",
+    track
+  };
+}
+
