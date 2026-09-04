@@ -15,13 +15,18 @@
   }
 
   function getThumbnail(videoId, isMusic) {
+    // YouTube is a SPA and og:image / player-bar images can lag behind the
+    // current song after navigation. Tie artwork directly to the current
+    // video ID so Discord can never keep the previous track's image.
+    if (videoId) return `https://i.ytimg.com/vi/${encodeURIComponent(videoId)}/hqdefault.jpg`;
+
     if (isMusic) {
       const img = document.querySelector("ytmusic-player-bar img.image, ytmusic-player-bar .thumbnail-image-wrapper img");
       if (img?.src?.startsWith("http")) return img.src;
     }
+
     const og = document.querySelector('meta[property="og:image"]')?.content;
-    if (og?.startsWith("http")) return og;
-    return videoId ? `https://i.ytimg.com/vi/${encodeURIComponent(videoId)}/hqdefault.jpg` : "";
+    return og?.startsWith("http") ? og : "";
   }
 
   function getTrack() {
