@@ -21,6 +21,9 @@ jobs:
           cache: npm
       - uses: dtolnay/rust-toolchain@stable
 
+      - name: Patch native helper WebSocket timeout
+        run: python scripts/patch_native_helper_timeout.py
+
       - name: Build low-memory native tray backend
         run: cargo build --release --manifest-path native-helper/Cargo.toml
 
@@ -47,8 +50,8 @@ jobs:
         if: github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.4.4
+          tag_name: v1.4.5
           target_commitish: ${{ github.sha }}
-          name: TuneCord v1.4.4
+          name: TuneCord v1.4.5
           generate_release_notes: true
           files: dist/TuneCord.exe
