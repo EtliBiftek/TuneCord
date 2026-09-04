@@ -24,6 +24,9 @@ jobs:
       - name: Build low-memory native tray backend
         run: cargo build --release --manifest-path native-helper/Cargo.toml
 
+      - name: Build native messaging bridge
+        run: cargo build --release --manifest-path native-host/Cargo.toml
+
       - name: Build TuneC icons
         run: |
           python -m pip install --quiet pillow
@@ -44,8 +47,8 @@ jobs:
         if: github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.4.2
+          tag_name: v1.4.3
           target_commitish: ${{ github.sha }}
-          name: TuneCord v1.4.2
+          name: TuneCord v1.4.3
           generate_release_notes: true
           files: dist/TuneCord.exe
