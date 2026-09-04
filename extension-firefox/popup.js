@@ -38,8 +38,12 @@ function render(status) {
 
 async function load(forcePair = false) {
   showError();
-  try { render(await request({ type: forcePair ? "pair" : "getStatus" })); }
-  catch (_) { $("bridgeState").textContent = "Uygulama kapalı"; showError("TuneCord.exe'yi aç, sonra yeniden bağlan."); }
+  try {
+    render(await request({ type: forcePair ? "pair" : "getStatus" }));
+  } catch (error) {
+    $("bridgeState").textContent = "Bağlantı kurulamadı";
+    showError(error?.message || "TuneCord.exe'yi aç, sonra yeniden bağlan.");
+  }
 }
 
 $("enabled").addEventListener("change", async event => {
