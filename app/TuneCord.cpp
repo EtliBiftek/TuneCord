@@ -5,7 +5,9 @@
 #include <ws2tcpip.h>
 #include <windows.h>
 #include <commctrl.h>
+#include <dwmapi.h>
 #include <shellapi.h>
+#include <uxtheme.h>
 #include <bcrypt.h>
 
 #include <algorithm>
@@ -34,6 +36,8 @@
 #pragma comment(lib, "comctl32.lib")
 #pragma comment(lib, "shell32.lib")
 #pragma comment(lib, "bcrypt.lib")
+#pragma comment(lib, "dwmapi.lib")
+#pragma comment(lib, "uxtheme.lib")
 
 namespace {
 
@@ -78,6 +82,11 @@ HINSTANCE g_instance = nullptr;
 HWND g_window = nullptr;
 HWND g_playlistView = nullptr;
 HFONT g_font = nullptr;
+HFONT g_titleFont = nullptr;
+HFONT g_smallFont = nullptr;
+HBRUSH g_backgroundBrush = nullptr;
+HBRUSH g_cardBrush = nullptr;
+HBRUSH g_fieldBrush = nullptr;
 NOTIFYICONDATAW g_tray{};
 std::mutex g_stateMutex;
 Config g_config;
@@ -88,6 +97,35 @@ std::atomic<long long> g_extensionSeen{0};
 std::atomic<bool> g_discordConnected{false};
 bool g_fillingPlaylists = false;
 bool g_exitRequested = false;
+
+constexpr COLORREF kBackground = RGB(12, 12, 15);
+constexpr COLORREF kCard = RGB(24, 24, 30);
+constexpr COLORREF kField = RGB(31, 31, 39);
+constexpr COLORREF kText = RGB(242, 242, 247);
+constexpr COLORREF kMutedText = RGB(165, 165, 178);
+constexpr COLORREF kAccent = RGB(151, 94, 255);
+constexpr COLORREF kAccentHover = RGB(176, 130, 255);
+
+void DrawRoundedRect(HDC dc, const RECT& rect, COLORREF fill, COLORREF border, int radius = 14) {
+    HBRUSH brush = CreateSolidBrush(fill);
+    HPEN pen = CreatePen(PS_SOLID, 1, border);
+    HGDIOBJ oldBrush = SelectObject(dc, brush);
+    HGDIOBJ oldPen = SelectObject(dc, pen);
+    RoundRect(dc, rect.left, rect.top, rect.right, rect.bottom, radius, radius);
+    SelectObject(dc, oldPen);
+    SelectObject(dc, oldBrush);
+    DeleteObject(pen);
+    DeleteObject(brush);
+}
+
+void EnableModernWindowFrame(HWND hwnd) {
+    const BOOL dark = TRUE;
+    const DWM_WINDOW_CORNER_PREFERENCE corners = DWMWCP_ROUND;
+    const COLORREF border = kBackground;
+    DwmSetWindowAttribute(hwnd, 20, &dark, sizeof(dark));
+    DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, &corners, sizeof(corners));
+    DwmSetWindowAttribute(hwnd, DWMWA_BORDER_COLOR, &border, sizeof(border));
+}
 
 std::wstring Utf8ToWide(const std::string& value) {
     if (value.empty()) return {};
@@ -741,6 +779,73 @@ void BridgeServer() {
 
 void ApplyFont(HWND control) { SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(g_font), TRUE); }
 
+bool IsChoiceControl(int id) {
+    return id == IDC_ENABLED || id == IDC_STARTUP || id == IDC_ALL_TRACKS || id == IDC_SELECTED_ONLY;
+}
+
+void DrawOwnerButton(const DRAWITEMSTRUCT* item) {
+    const int id = static_cast<int>(item->CtlID);
+    const bool selected = (item->itemState & ODS_SELECTED) != 0;
+    const bool checked = SendMessageW(item->hwndItem, BM_GETCHECK, 0, 0) == BST_CHECKED;
+    const RECT& r = item->rcItem;
+    HDC dc = item->hDC;
+    SetBkMode(dc, TRANSPARENT);
+
+    if (IsChoiceControl(id)) {
+        RECT mark{r.left, r.top + 3, r.left + 20, r.top + 23};
+        const bool radio = id == IDC_ALL_TRACKS || id == IDC_SELECTED_ONLY;
+        DrawRoundedRect(dc, mark, checked ? kAccent : kField, checked ? kAccent : RGB(66, 66, 79), radio ? 20 : 6);
+        if (checked && !radio) {
+            HPEN pen = CreatePen(PS_SOLID, 2, RGB(255, 255, 255));
+            HGDIOBJ old = SelectObject(dc, pen);
+            MoveToEx(dc, mark.left + 5, mark.top + 10, nullptr);
+            LineTo(dc, mark.left + 9, mark.top + 14);
+            LineTo(dc, mark.left + 16, mark.top + 6);
+            SelectObject(dc, old);
+            DeleteObject(pen);
+        } else if (checked) {
+            HBRUSH dot = CreateSolidBrush(RGB(255, 255, 255));
+            HGDIOBJ old = SelectObject(dc, dot);
+            Ellipse(dc, mark.left + 6, mark.top + 6, mark.right - 6, mark.bottom - 6);
+            SelectObject(dc, old);
+            DeleteObject(dot);
+        }
+        SetTextColor(dc, kText);
+        SelectObject(dc, g_font);
+        RECT text{r.left + 30, r.top, r.right, r.bottom};
+        wchar_t label[256]{};
+        GetWindowTextW(item->hwndItem, label, 256);
+        DrawTextW(dc, label, -1, &text, DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS);
+        return;
+    }
+
+    const bool primary = id == IDC_SAVE;
+    const COLORREF fill = primary ? (selected ? kAccentHover : kAccent) : (selected ? RGB(54, 54, 66) : kField);
+    const COLORREF border = primary ? fill : RGB(69, 69, 82);
+    DrawRoundedRect(dc, r, fill, border, 12);
+    SetTextColor(dc, kText);
+    SelectObject(dc, g_font);
+    wchar_t label[256]{};
+    GetWindowTextW(item->hwndItem, label, 256);
+    RECT text = r;
+    DrawTextW(dc, label, -1, &text, DT_SINGLELINE | DT_CENTER | DT_VCENTER | DT_END_ELLIPSIS);
+}
+
+void PaintBackground(HWND hwnd) {
+    PAINTSTRUCT ps{};
+    HDC dc = BeginPaint(hwnd, &ps);
+    RECT client{};
+    GetClientRect(hwnd, &client);
+    FillRect(dc, &client, g_backgroundBrush);
+    RECT topCard{16, 12, client.right - 16, 116};
+    RECT settingsCard{16, 128, client.right - 16, 286};
+    RECT playlistCard{16, 298, client.right - 16, client.bottom - 16};
+    DrawRoundedRect(dc, topCard, kCard, RGB(42, 42, 51), 18);
+    DrawRoundedRect(dc, settingsCard, kCard, RGB(42, 42, 51), 18);
+    DrawRoundedRect(dc, playlistCard, kCard, RGB(42, 42, 51), 18);
+    EndPaint(hwnd, &ps);
+}
+
 void SetButtonCheck(HWND control, UINT state) { SendMessageW(control, BM_SETCHECK, state, 0); }
 UINT GetButtonCheck(HWND control) { return static_cast<UINT>(SendMessageW(control, BM_GETCHECK, 0, 0)); }
 
@@ -887,59 +992,93 @@ void ShowTrayMenu() {
 }
 
 void LayoutControls(int width, int height) {
-    const int margin = 24;
+    const int margin = 32;
     const int contentWidth = width - margin * 2;
     MoveWindow(GetDlgItem(g_window, IDC_CONNECTION_STATUS), margin, 63, contentWidth, 22, TRUE);
-    MoveWindow(GetDlgItem(g_window, IDC_NOW_PLAYING), margin, 90, contentWidth, 24, TRUE);
-    MoveWindow(GetDlgItem(g_window, IDC_ENABLED), margin, 126, 220, 24, TRUE);
-    MoveWindow(GetDlgItem(g_window, IDC_STARTUP), margin + 250, 126, 240, 24, TRUE);
-    MoveWindow(GetDlgItem(g_window, IDC_DISCORD_ID), margin, 184, contentWidth - 240, 28, TRUE);
-    MoveWindow(GetDlgItem(g_window, IDC_SAVE), width - margin - 110, 181, 110, 32, TRUE);
-    MoveWindow(GetDlgItem(g_window, IDC_RESET_PAIRING), width - margin - 225, 181, 105, 32, TRUE);
-    MoveWindow(GetDlgItem(g_window, IDC_ALL_TRACKS), margin, 246, 190, 24, TRUE);
-    MoveWindow(GetDlgItem(g_window, IDC_SELECTED_ONLY), margin + 195, 246, 260, 24, TRUE);
-    MoveWindow(g_playlistView, margin, 278, contentWidth, std::max(100, height - 340), TRUE);
-    MoveWindow(GetDlgItem(g_window, IDC_EXIT), width - margin - 80, height - 48, 80, 28, TRUE);
+    MoveWindow(GetDlgItem(g_window, IDC_NOW_PLAYING), margin, 89, contentWidth, 22, TRUE);
+    MoveWindow(GetDlgItem(g_window, IDC_ENABLED), margin, 142, 220, 24, TRUE);
+    MoveWindow(GetDlgItem(g_window, IDC_STARTUP), margin + 250, 142, 290, 24, TRUE);
+    MoveWindow(GetDlgItem(g_window, IDC_DISCORD_ID), margin, 198, contentWidth - 246, 32, TRUE);
+    MoveWindow(GetDlgItem(g_window, IDC_SAVE), width - margin - 108, 198, 108, 32, TRUE);
+    MoveWindow(GetDlgItem(g_window, IDC_RESET_PAIRING), width - margin - 222, 198, 104, 32, TRUE);
+    MoveWindow(GetDlgItem(g_window, IDC_ALL_TRACKS), margin, 258, 180, 24, TRUE);
+    MoveWindow(GetDlgItem(g_window, IDC_SELECTED_ONLY), margin + 190, 258, 270, 24, TRUE);
+    MoveWindow(g_playlistView, margin, 338, contentWidth, std::max(100, height - 400), TRUE);
+    MoveWindow(GetDlgItem(g_window, IDC_EXIT), width - margin - 86, height - 48, 86, 32, TRUE);
 }
 
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
     switch (message) {
         case WM_CREATE: {
             g_window = hwnd;
+            EnableModernWindowFrame(hwnd);
+            g_backgroundBrush = CreateSolidBrush(kBackground);
+            g_cardBrush = CreateSolidBrush(kCard);
+            g_fieldBrush = CreateSolidBrush(kField);
             g_font = CreateFontW(-16, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
-                                 CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
-            HWND title = AddControl(L"STATIC", L"TuneCord", SS_LEFT, 24, 20, 300, 32, -1);
-            HFONT titleFont = CreateFontW(-25, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
-                                         CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
-            SendMessageW(title, WM_SETFONT, reinterpret_cast<WPARAM>(titleFont), TRUE);
-            SetPropW(title, L"TuneCord.TitleFont", titleFont);
-            AddControl(L"STATIC", L"Eklenti: bekleniyor    Discord: bekleniyor", SS_LEFT, 24, 63, 620, 22, IDC_CONNECTION_STATUS);
-            AddControl(L"STATIC", L"Şu an: bir şey çalmıyor", SS_LEFT | SS_PATHELLIPSIS, 24, 90, 620, 24, IDC_NOW_PLAYING);
-            AddControl(L"BUTTON", L"Discord'da göster", BS_AUTOCHECKBOX, 24, 126, 220, 24, IDC_ENABLED);
-            AddControl(L"BUTTON", L"Windows açılışında tray'de başlat", BS_AUTOCHECKBOX, 274, 126, 280, 24, IDC_STARTUP);
-            AddControl(L"STATIC", L"Discord Application ID", SS_LEFT, 24, 160, 260, 20, -1);
-            AddControl(L"EDIT", L"", WS_BORDER | ES_AUTOHSCROLL, 24, 184, 350, 28, IDC_DISCORD_ID);
-            AddControl(L"BUTTON", L"Kaydet", BS_PUSHBUTTON, 560, 181, 110, 32, IDC_SAVE);
-            AddControl(L"BUTTON", L"Eşleşmeyi sıfırla", BS_PUSHBUTTON, 445, 181, 105, 32, IDC_RESET_PAIRING);
-            AddControl(L"STATIC", L"Playlist filtresi", SS_LEFT, 24, 222, 260, 20, -1);
-            AddControl(L"BUTTON", L"Tüm şarkılar", BS_AUTORADIOBUTTON | WS_GROUP, 24, 246, 190, 24, IDC_ALL_TRACKS);
-            AddControl(L"BUTTON", L"Yalnızca seçili playlistler", BS_AUTORADIOBUTTON, 219, 246, 260, 24, IDC_SELECTED_ONLY);
+                                 CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI Variable");
+            g_titleFont = CreateFontW(-27, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+                                      CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI Variable Display");
+            g_smallFont = CreateFontW(-14, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+                                      CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI Variable");
+            HWND title = AddControl(L"STATIC", L"TuneCord", SS_LEFT, 32, 26, 300, 32, -1);
+            SendMessageW(title, WM_SETFONT, reinterpret_cast<WPARAM>(g_titleFont), TRUE);
+            AddControl(L"STATIC", L"Eklenti: bekleniyor    •    Discord: bekleniyor", SS_LEFT, 32, 63, 620, 22, IDC_CONNECTION_STATUS);
+            AddControl(L"STATIC", L"Şu an: bir şey çalmıyor", SS_LEFT | SS_PATHELLIPSIS, 32, 89, 620, 22, IDC_NOW_PLAYING);
+            AddControl(L"BUTTON", L"Discord'da göster", BS_OWNERDRAW, 32, 142, 220, 24, IDC_ENABLED);
+            AddControl(L"BUTTON", L"Windows açılışında tray'de başlat", BS_OWNERDRAW, 282, 142, 290, 24, IDC_STARTUP);
+            AddControl(L"STATIC", L"DISCORD APPLICATION ID", SS_LEFT, 32, 174, 260, 20, -1);
+            AddControl(L"EDIT", L"", ES_AUTOHSCROLL, 32, 198, 350, 32, IDC_DISCORD_ID);
+            AddControl(L"BUTTON", L"Kaydet", BS_OWNERDRAW, 560, 198, 108, 32, IDC_SAVE);
+            AddControl(L"BUTTON", L"Sıfırla", BS_OWNERDRAW, 446, 198, 104, 32, IDC_RESET_PAIRING);
+            AddControl(L"STATIC", L"PLAYLIST FİLTRESİ", SS_LEFT, 32, 238, 260, 20, -1);
+            AddControl(L"BUTTON", L"Tüm şarkılar", BS_OWNERDRAW, 32, 258, 180, 24, IDC_ALL_TRACKS);
+            AddControl(L"BUTTON", L"Yalnızca seçili playlistler", BS_OWNERDRAW, 222, 258, 270, 24, IDC_SELECTED_ONLY);
 
             g_playlistView = CreateWindowExW(WS_EX_CLIENTEDGE, WC_LISTVIEWW, L"", WS_CHILD | WS_VISIBLE | LVS_REPORT | LVS_SHOWSELALWAYS,
-                                              24, 278, 646, 205, hwnd, reinterpret_cast<HMENU>(IDC_PLAYLISTS), g_instance, nullptr);
+                                              32, 338, 646, 205, hwnd, reinterpret_cast<HMENU>(IDC_PLAYLISTS), g_instance, nullptr);
             ApplyFont(g_playlistView);
+            SetWindowTheme(g_playlistView, L"Explorer", nullptr);
+            ListView_SetBkColor(g_playlistView, kField);
+            ListView_SetTextBkColor(g_playlistView, kField);
+            ListView_SetTextColor(g_playlistView, kText);
             ListView_SetExtendedListViewStyle(g_playlistView, LVS_EX_FULLROWSELECT | LVS_EX_CHECKBOXES | LVS_EX_DOUBLEBUFFER);
             LVCOLUMNW column{};
             column.mask = LVCF_TEXT | LVCF_WIDTH;
             column.pszText = const_cast<wchar_t*>(L"Playlist"); column.cx = 390; ListView_InsertColumn(g_playlistView, 0, &column);
             column.pszText = const_cast<wchar_t*>(L"Playlist ID"); column.cx = 220; ListView_InsertColumn(g_playlistView, 1, &column);
-            AddControl(L"BUTTON", L"Çıkış", BS_PUSHBUTTON, 590, 492, 80, 28, IDC_EXIT);
+            AddControl(L"BUTTON", L"Çıkış", BS_OWNERDRAW, 582, 550, 86, 32, IDC_EXIT);
 
             AddTrayIcon();
             RefreshUi(true);
             SetTimer(hwnd, kPresenceTimer, 5000, nullptr);
             return 0;
         }
+        case WM_PAINT:
+            PaintBackground(hwnd);
+            return 0;
+        case WM_ERASEBKGND:
+            return 1;
+        case WM_CTLCOLORSTATIC: {
+            HDC dc = reinterpret_cast<HDC>(wParam);
+            const int id = GetDlgCtrlID(reinterpret_cast<HWND>(lParam));
+            SetBkMode(dc, TRANSPARENT);
+            SetTextColor(dc, (id == IDC_CONNECTION_STATUS || id == IDC_NOW_PLAYING) ? kMutedText : kText);
+            if (id == -1) SetTextColor(dc, kAccentHover);
+            return reinterpret_cast<LRESULT>(GetStockObject(NULL_BRUSH));
+        }
+        case WM_CTLCOLOREDIT: {
+            HDC dc = reinterpret_cast<HDC>(wParam);
+            SetTextColor(dc, kText);
+            SetBkColor(dc, kField);
+            return reinterpret_cast<LRESULT>(g_fieldBrush);
+        }
+        case WM_DRAWITEM:
+            if (wParam != IDC_PLAYLISTS) {
+                DrawOwnerButton(reinterpret_cast<const DRAWITEMSTRUCT*>(lParam));
+                return TRUE;
+            }
+            break;
         case WM_SIZE:
             LayoutControls(LOWORD(lParam), HIWORD(lParam));
             return 0;
@@ -953,6 +1092,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
             const int id = LOWORD(wParam);
             if (id == IDC_SAVE) SaveUiSettings();
             else if (id == IDC_ENABLED && HIWORD(wParam) == BN_CLICKED) {
+                SetButtonCheck(GetDlgItem(hwnd, IDC_ENABLED), GetButtonCheck(GetDlgItem(hwnd, IDC_ENABLED)) == BST_CHECKED ? BST_UNCHECKED : BST_CHECKED);
                 {
                     std::lock_guard lock(g_stateMutex);
                     g_config.enabled = GetButtonCheck(GetDlgItem(hwnd, IDC_ENABLED)) == BST_CHECKED;
@@ -960,12 +1100,15 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
                 }
                 ProcessPresence();
             } else if (id == IDC_STARTUP && HIWORD(wParam) == BN_CLICKED) {
+                SetButtonCheck(GetDlgItem(hwnd, IDC_STARTUP), GetButtonCheck(GetDlgItem(hwnd, IDC_STARTUP)) == BST_CHECKED ? BST_UNCHECKED : BST_CHECKED);
                 bool enable = GetButtonCheck(GetDlgItem(hwnd, IDC_STARTUP)) == BST_CHECKED;
                 if (!SetStartupEnabled(enable)) {
                     MessageBoxW(hwnd, L"Başlangıç ayarı değiştirilemedi.", kWindowTitle, MB_OK | MB_ICONERROR);
                     SetButtonCheck(GetDlgItem(hwnd, IDC_STARTUP), StartupEnabled() ? BST_CHECKED : BST_UNCHECKED);
                 }
             } else if (id == IDC_ALL_TRACKS || id == IDC_SELECTED_ONLY) {
+                SetButtonCheck(GetDlgItem(hwnd, IDC_ALL_TRACKS), id == IDC_ALL_TRACKS ? BST_CHECKED : BST_UNCHECKED);
+                SetButtonCheck(GetDlgItem(hwnd, IDC_SELECTED_ONLY), id == IDC_SELECTED_ONLY ? BST_CHECKED : BST_UNCHECKED);
                 {
                     std::lock_guard lock(g_stateMutex);
                     g_config.selectedOnly = id == IDC_SELECTED_ONLY;
@@ -992,11 +1135,22 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
             }
             return 0;
         }
-        case WM_NOTIFY:
-            if (reinterpret_cast<LPNMHDR>(lParam)->idFrom == IDC_PLAYLISTS && !g_fillingPlaylists) {
+        case WM_NOTIFY: {
+            const auto* notify = reinterpret_cast<LPNMHDR>(lParam);
+            if (notify->idFrom == IDC_PLAYLISTS && notify->code == NM_CUSTOMDRAW) {
+                auto* draw = reinterpret_cast<LPNMLVCUSTOMDRAW>(lParam);
+                if (draw->nmcd.dwDrawStage == CDDS_PREPAINT) return CDRF_NOTIFYITEMDRAW;
+                if (draw->nmcd.dwDrawStage == CDDS_ITEMPREPAINT) {
+                    draw->clrText = kText;
+                    draw->clrTextBk = kField;
+                    return CDRF_NEWFONT;
+                }
+            }
+            if (notify->idFrom == IDC_PLAYLISTS && !g_fillingPlaylists) {
                 // Seçimler Kaydet düğmesine basılınca merkezi ayara yazılır.
             }
             return 0;
+        }
         case WM_TIMER:
             if (wParam == kPresenceTimer) {
                 ProcessPresence();
@@ -1023,6 +1177,11 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
             SOCKET server = g_listenSocket.exchange(INVALID_SOCKET);
             if (server != INVALID_SOCKET) closesocket(server);
             if (g_font) DeleteObject(g_font);
+            if (g_titleFont) DeleteObject(g_titleFont);
+            if (g_smallFont) DeleteObject(g_smallFont);
+            if (g_backgroundBrush) DeleteObject(g_backgroundBrush);
+            if (g_cardBrush) DeleteObject(g_cardBrush);
+            if (g_fieldBrush) DeleteObject(g_fieldBrush);
             PostQuitMessage(0);
             return 0;
         }
