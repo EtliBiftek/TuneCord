@@ -134,9 +134,9 @@ async function ensureHelper() {
   if (!fs.existsSync(bundledNativeHost)) throw new Error("TuneCord native messaging bridge pakette bulunamadı.");
   if (fs.existsSync(bundledIcon)) { try { fs.copyFileSync(bundledIcon, iconPath); } catch (_) {} }
 
-  // Tarayıcı localhost/WebSocket kısıtlamalarından etkilenmesin diye extension
-  // trafiğini Chrome/Firefox'un resmi Native Messaging API'sinden geçiriyoruz.
-  replaceHelperBinary(bundledNativeHost, nativeHostPath);
+  // Native host uzun süre açık kalabildiği için çalışan EXE'yi tekrar yazmaya çalışma.
+  // Sürüm numarası dosya adına dahil olduğundan yeni sürümlerde zaten yeni binary oluşur.
+  if (!fs.existsSync(nativeHostPath)) replaceHelperBinary(bundledNativeHost, nativeHostPath);
   registerNativeMessaging(nativeHostPath);
 
   let state = await currentBackend();
