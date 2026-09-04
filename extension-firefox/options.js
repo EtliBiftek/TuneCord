@@ -59,12 +59,15 @@ async function refreshBridgeState(silent = false) {
     selectedIds = new Set(status.selectedPlaylistIds || []);
     render();
     if (!silent) note("TuneCord bağlantısı hazır");
-    else if ($("message").textContent.includes("TuneCord.exe")) note("");
+    else if ($("message").classList.contains("bad")) note("");
   } catch (error) {
     status = null;
     $("appState").textContent = "Uygulama kapalı";
     $("appState").classList.remove("online");
-    if (!silent || $("message").textContent === "") note("TuneCord yerel servisine ulaşılamıyor. TuneCord.exe açıksa eklentiyi yeniden yükle.", true);
+    const detail = error?.message || "Bilinmeyen Native Messaging hatası";
+    if (!silent || $("message").textContent === "" || !$("message").textContent.includes(detail)) {
+      note(`Native Messaging bağlantı hatası: ${detail}`, true);
+    }
   } finally {
     bridgeRefreshBusy = false;
   }
