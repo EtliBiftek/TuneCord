@@ -105,7 +105,7 @@ if native_marker not in text:
                 _ => Ok(json!({"id":id,"ok":false,"error":"Bilinmeyen Native Messaging isteği."}))
             }
         })(),
-'''
+'''.replace('\\"', '"')
     text = text.replace(native_anchor, native_endpoint + native_anchor, 1)
     changes.append("added stateless /api/native bridge")
 
