@@ -29,3 +29,33 @@ spawnBrowser = function openSelectedBrowserPage(browser, url) {
   });
   child.unref();
 };
+
+// Some Chromium/Firefox forks can report a runtime extension ID that differs
+// from the canonical IDs even when TuneCord's unpacked extension was loaded.
+// Keep the strict known IDs, but during a user-prepared local extension setup
+// trust an extension-shaped runtime ID from the selected browser family and
+// remember it for the lifetime of this app process.
+const originalHandleWsMessage = handleWsMessage;
+handleWsMessage = function handleWsMessageWithBrowserIdCompatibility(client, message) {
+  if (message?.type === "hello") {
+    const extensionId = String(message.extensionId || "").trim();
+    let family = String(message.browserFamily || "").trim().toLowerCase();
+
+    if (!family) {
+      if (/^[a-p]{32}$/.test(extensionId)) family = "chromium";
+      else if (extensionId.includes("@")) family = "firefox";
+      else family = config.selectedBrowserFamily || "";
+    }
+
+    const selectedFamily = config.selectedBrowserFamily || browserFamilyFromId(config.selectedBrowserId);
+    const familyMatchesSetup = Boolean(config.extensionInstalled) && (!selectedFamily || selectedFamily === family);
+    const chromiumLike = family === "chromium" && /^[a-p]{32}$/.test(extensionId);
+    const firefoxLike = family === "firefox" && extensionId.length >= 3 && extensionId.length <= 160;
+
+    if (!ALLOWED_EXTENSION_IDS.has(extensionId) && familyMatchesSetup && (chromiumLike || firefoxLike)) {
+      ALLOWED_EXTENSION_IDS.add(extensionId);
+    }
+  }
+
+  return originalHandleWsMessage(client, message);
+};
