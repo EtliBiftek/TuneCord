@@ -2,11 +2,16 @@
   "manifest_version": 3,
   "name": "TuneCord - YouTube Discord Presence",
   "description": "YouTube ve YouTube Music'te dinlediğin parçayı TuneCord üzerinden Discord'da gösterir.",
-  "version": "1.3.0",
+  "version": "1.4.2",
   "minimum_chrome_version": "116",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAvKnH2eGbriLBdGxX8JUvlyWYRpk10hIi4BeLjwG4anBbGFjdtYB3JvTRGWQpWd/ZnlnYTC2dq+x8aCzxWpintcFk1JmkzYW+dYzpIyA8BYzZyvaW7lUJuQ92iEFcqt8X9HIwrEWNNB3jjDrHxMo1L1+tOcgS2ew9uoOQczguNHeLmSf/fQQ97YUfHl5+Ed18PvLw+tbk77syy4+VC4OkhbZ+w/BIYRVE4cbOlSalcIJSwR42i8Q5eopCdyqzlvLHo1/fsitpI4p4+SQ87ddVwAhKb8nGzHxaMIg5TNVs2ISAeeXYjelPigKIy2N00klYyulTSgsluUYXtQOuEl3AtwIDAQAB",
   "permissions": ["storage"],
-  "host_permissions": ["https://www.youtube.com/*", "https://music.youtube.com/*"],
+  "host_permissions": [
+    "https://www.youtube.com/*",
+    "https://music.youtube.com/*",
+    "http://127.0.0.1/*",
+    "http://localhost/*"
+  ],
   "background": {"service_worker": "background.js"},
   "action": {
     "default_title": "TuneCord",
