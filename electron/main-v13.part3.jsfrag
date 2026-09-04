@@ -189,8 +189,11 @@ ipcMain.handle("install-extension", (_, browserId) => {
 ipcMain.handle("launch-browser", () => {
   const browser = selectedBrowserInfo();
   if (!browser) throw new Error("Önce bir tarayıcı seç.");
-  spawnBrowser(browser, "https://www.youtube.com/");
-  return { ok: true };
+  const extensionsUrl = browser.extensionsUrl || (browser.family === "firefox"
+    ? "about:debugging#/runtime/this-firefox"
+    : "chrome://extensions/");
+  spawnBrowser(browser, extensionsUrl);
+  return { ok: true, browser: browser.name, extensionsUrl };
 });
 ipcMain.handle("skip-setup", () => {
   config.setupComplete = true;
