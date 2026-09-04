@@ -81,6 +81,46 @@ function replaceHelperBinary(source, target) {
   fs.renameSync(temp, target);
 }
 
+function copyDirectory(source, target) {
+  if (!fs.existsSync(source)) throw new Error(`Kaynak klasör bulunamadı: ${source}`);
+  fs.rmSync(target, { recursive: true, force: true });
+  fs.mkdirSync(target, { recursive: true });
+  for (const entry of fs.readdirSync(source, { withFileTypes: true })) {
+    const from = path.join(source, entry.name);
+    const to = path.join(target, entry.name);
+    if (entry.isDirectory()) copyDirectory(from, to);
+    else fs.copyFileSync(from, to);
+  }
+}
+
+async function stageExtensionResources(browserId) {
+  const browsers = await backend("GET", "/api/scan-browsers");
+  const browser = Array.isArray(browsers) ? browsers.find(item => item.id === browserId) : null;
+  if (!browser) throw new Error("Seçtiğin tarayıcı bulunamadı. Yeniden tara.");
+
+  const folder = browser.family === "firefox" ? "extension-firefox" : "extension";
+  const candidates = [
+    path.join(process.resourcesPath, folder),
+    path.join(app.getAppPath(), folder)
+  ];
+  const source = candidates.find(candidate => fs.existsSync(path.join(candidate, "manifest.json")));
+  if (!source) {
+    throw new Error("TuneCord eklenti dosyaları EXE paketinde bulunamadı. Bu build eksik oluşturulmuş.");
+  }
+
+  // Portable Electron uygulamasının geçici extraction klasörüne güvenmiyoruz.
+  // Eklentiyi önce kalıcı LOCALAPPDATA staging alanına çıkarıp native helper'a
+  // fiziksel bir klasör yolu veriyoruz. app.asar içindeki yedek kopya da bu
+  // yöntemle okunabildiği için bozuk/eksik extraResources paketlerine dayanıklı.
+  const stagingRoot = path.join(localBinDir(), "extension-resources", VERSION);
+  const stagedFolder = path.join(stagingRoot, folder);
+  copyDirectory(source, stagedFolder);
+  if (!fs.existsSync(path.join(stagedFolder, "manifest.json"))) {
+    throw new Error("TuneCord eklenti dosyaları hazırlanırken manifest oluşturulamadı.");
+  }
+  return stagingRoot;
+}
+
 function addRegistryNativeHost(key, manifestPath) {
   let ok = false;
   for (const view of ["32", "64"]) {
@@ -141,8 +181,6 @@ async function ensureHelper() {
   if (!fs.existsSync(bundledNativeHost)) throw new Error("TuneCord native messaging bridge pakette bulunamadı.");
   if (fs.existsSync(bundledIcon)) { try { fs.copyFileSync(bundledIcon, iconPath); } catch (_) {} }
 
-  // Native host uzun süre açık kalabildiği için çalışan EXE'yi tekrar yazmaya çalışma.
-  // Sürüm numarası dosya adına dahil olduğundan yeni sürümlerde zaten yeni binary oluşur.
   if (!fs.existsSync(nativeHostPath)) replaceHelperBinary(bundledNativeHost, nativeHostPath);
   registerNativeMessaging(nativeHostPath);
 
@@ -209,10 +247,11 @@ ipcMain.handle("state", () => backend("GET", "/api/state"));
 ipcMain.handle("save", (_, value) => backend("POST", "/api/control", value || {}));
 ipcMain.handle("reset-pairing", () => backend("POST", "/api/reset-pairing", {}));
 ipcMain.handle("scan-browsers", () => backend("GET", "/api/scan-browsers"));
-ipcMain.handle("install-extension", (_, browserId) => backend("POST", "/api/install-extension", {
-  browserId: String(browserId || ""),
-  resourceRoot: app.isPackaged ? process.resourcesPath : app.getAppPath()
-}));
+ipcMain.handle("install-extension", async (_, browserId) => {
+  const id = String(browserId || "");
+  const resourceRoot = await stageExtensionResources(id);
+  return backend("POST", "/api/install-extension", { browserId: id, resourceRoot });
+});
 ipcMain.handle("launch-browser", () => backend("POST", "/api/launch-browser", {}));
 ipcMain.handle("skip-setup", () => backend("POST", "/api/skip-setup", {}));
 ipcMain.handle("reset-setup", () => backend("POST", "/api/reset-setup", {}));
