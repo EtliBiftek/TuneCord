@@ -6,10 +6,11 @@ use std::{
     net::TcpStream,
     path::PathBuf,
     process,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 const PORT: u16 = 37645;
+const BACKEND_STALE_AFTER: Duration = Duration::from_secs(4);
 
 fn appdata_dir() -> PathBuf {
     let root = env::var_os("APPDATA")
@@ -208,6 +209,17 @@ fn connect_backend(origin: &str) -> Result<TcpStream, String> {
     Err("TuneCord eşleşmesi tamamlanamadı.".into())
 }
 
+fn backend_roundtrip(stream: &mut TcpStream, message: &Value, id: &Value) -> Result<Vec<Value>, String> {
+    send_ws_json(stream, message).map_err(|e| e.to_string())?;
+    let mut replies = Vec::new();
+    loop {
+        let Some(reply) = read_ws_json(stream)? else { return Err("TuneCord bağlantıyı kapattı.".into()); };
+        let is_response = reply.get("id") == Some(id) && !id.is_null();
+        replies.push(reply);
+        if is_response { return Ok(replies); }
+    }
+}
+
 fn error_reply(id: Value, message: impl Into<String>) -> Value {
     json!({"id": id, "ok": false, "error": message.into()})
 }
@@ -217,6 +229,7 @@ fn main() {
     let mut input = io::stdin().lock();
     let mut output = io::stdout().lock();
     let mut backend: Option<TcpStream> = None;
+    let mut last_backend_use: Option<Instant> = None;
 
     loop {
         let message = match read_native_message(&mut input) {
@@ -229,41 +242,46 @@ fn main() {
         };
         let id = message.get("id").cloned().unwrap_or(Value::Null);
 
-        if backend.is_none() {
-            match connect_backend(&origin) {
-                Ok(stream) => backend = Some(stream),
-                Err(error) => {
-                    let _ = write_native_message(&mut output, &error_reply(id, error));
-                    continue;
-                }
-            }
-        }
-
-        let stream = backend.as_mut().unwrap();
-        if let Err(error) = send_ws_json(stream, &message) {
+        if last_backend_use.map(|t| t.elapsed() >= BACKEND_STALE_AFTER).unwrap_or(false) {
             backend = None;
-            let _ = write_native_message(&mut output, &error_reply(id, error.to_string()));
-            continue;
+            last_backend_use = None;
         }
 
-        loop {
-            match read_ws_json(stream) {
-                Ok(Some(reply)) => {
-                    let is_response = reply.get("id") == Some(&id) && !id.is_null();
-                    if write_native_message(&mut output, &reply).is_err() { return; }
-                    if is_response { break; }
+        let mut replies: Option<Vec<Value>> = None;
+        let mut last_error = "TuneCord yerel köprüsüne bağlanılamadı.".to_string();
+
+        for _ in 0..2 {
+            if backend.is_none() {
+                match connect_backend(&origin) {
+                    Ok(stream) => backend = Some(stream),
+                    Err(error) => {
+                        last_error = error;
+                        continue;
+                    }
                 }
-                Ok(None) => {
-                    backend = None;
-                    let _ = write_native_message(&mut output, &error_reply(id, "TuneCord bağlantısı kapandı."));
+            }
+
+            let result = backend_roundtrip(backend.as_mut().unwrap(), &message, &id);
+            match result {
+                Ok(value) => {
+                    replies = Some(value);
+                    last_backend_use = Some(Instant::now());
                     break;
                 }
                 Err(error) => {
+                    last_error = error;
                     backend = None;
-                    let _ = write_native_message(&mut output, &error_reply(id, error));
-                    break;
+                    last_backend_use = None;
                 }
             }
+        }
+
+        if let Some(values) = replies {
+            for reply in values {
+                if write_native_message(&mut output, &reply).is_err() { return; }
+            }
+        } else if write_native_message(&mut output, &error_reply(id, last_error)).is_err() {
+            return;
         }
     }
 }
