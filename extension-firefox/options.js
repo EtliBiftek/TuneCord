@@ -5,6 +5,7 @@ let selectedIds = new Set();
 let discordTimer = null;
 let discordEditing = false;
 let saveChain = Promise.resolve();
+let bridgeRefreshBusy = false;
 
 async function request(message) {
   const result = await api.runtime.sendMessage(message);
@@ -50,9 +51,27 @@ function persist(control, text = "Kaydedildi") {
   return saveChain;
 }
 
+async function refreshBridgeState(silent = false) {
+  if (bridgeRefreshBusy) return;
+  bridgeRefreshBusy = true;
+  try {
+    status = await request({ type: "getStatus" });
+    selectedIds = new Set(status.selectedPlaylistIds || []);
+    render();
+    if (!silent) note("TuneCord bağlantısı hazır");
+    else if ($("message").textContent.includes("TuneCord.exe")) note("");
+  } catch (error) {
+    status = null;
+    $("appState").textContent = "Uygulama kapalı";
+    $("appState").classList.remove("online");
+    if (!silent || $("message").textContent === "") note("TuneCord yerel servisine ulaşılamıyor. TuneCord.exe açıksa eklentiyi yeniden yükle.", true);
+  } finally {
+    bridgeRefreshBusy = false;
+  }
+}
+
 async function load() {
-  try { status = await request({ type: "getStatus" }); selectedIds = new Set(status.selectedPlaylistIds || []); render(); }
-  catch (_) { $("appState").textContent = "Uygulama kapalı"; note("Önce TuneCord.exe'yi çalıştır.", true); }
+  await refreshBridgeState(false);
   try {
     const local = await request({ type: "playlistState" });
     $("extensionId").textContent = local.extensionId || "—";
@@ -81,4 +100,6 @@ $("discordAppId").addEventListener("input", event => {
 $("resetDiscordId").addEventListener("click", () => { discordEditing = false; $("discordAppId").value = status?.defaultDiscordAppId || "1545256357727576124"; persist({ resetDiscordAppId: true }, "Standart Discord ID geri yüklendi"); });
 $("search").addEventListener("input", renderPlaylists);
 api.runtime.onMessage.addListener(message => { if (message?.type === "bridgeState" && message.state) { status = message.state; selectedIds = new Set(status.selectedPlaylistIds || []); render(); } });
+document.addEventListener("visibilitychange", () => { if (!document.hidden) refreshBridgeState(true); });
+setInterval(() => { if (!document.hidden) refreshBridgeState(true); }, 2000);
 load();
