@@ -1,0 +1,33 @@
+{
+  "name": "tunecord",
+  "version": "1.0.2",
+  "description": "YouTube and YouTube Music Discord presence bridge",
+  "main": "electron/main.js",
+  "author": "TuneCord",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win portable"
+  },
+  "devDependencies": {
+    "electron": "^37.3.1",
+    "electron-builder": "^26.0.12"
+  },
+  "build": {
+    "appId": "com.tunecord.desktop",
+    "productName": "TuneCord",
+    "asar": true,
+    "files": [
+      "electron/**/*",
+      "extension/ui.css",
+      "package.json"
+    ],
+    "win": {
+      "target": ["portable"],
+      "artifactName": "TuneCord.exe"
+    },
+    "portable": {
+      "artifactName": "TuneCord.exe"
+    }
+  }
+}

@@ -1,10 +1,14 @@
 $ErrorActionPreference = "Stop"
-$vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-if (-not (Test-Path $vswhere)) {
-    throw "Visual Studio 2022 bulunamadı. 'Desktop development with C++' bileşenini kur veya GitHub Actions build'ini kullan."
+if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
+    throw "Node.js 22+ bulunamadı. https://nodejs.org üzerinden LTS sürümünü kur."
 }
-$msbuild = & $vswhere -latest -products * -requires Microsoft.Component.MSBuild -find MSBuild\**\Bin\MSBuild.exe | Select-Object -First 1
-if (-not $msbuild) { throw "MSBuild bulunamadı." }
-& $msbuild (Join-Path $PSScriptRoot "TuneCord.sln") /m /p:Configuration=Release /p:Platform=x64
-if ($LASTEXITCODE -ne 0) { throw "Build başarısız oldu." }
+Push-Location $PSScriptRoot
+try {
+    npm ci
+    if ($LASTEXITCODE -ne 0) { throw "Bağımlılıklar kurulamadı." }
+    npm run dist
+    if ($LASTEXITCODE -ne 0) { throw "Electron build başarısız oldu." }
+} finally {
+    Pop-Location
+}
 Write-Host "Hazır: $(Join-Path $PSScriptRoot 'dist\TuneCord.exe')"

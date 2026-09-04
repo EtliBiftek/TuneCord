@@ -1,6 +1,6 @@
 # TuneCord
 
-TuneCord, YouTube ve YouTube Music'te çalan parçayı yerel Windows uygulamasına aktarır ve Discord'da **Listening / Dinliyor** Rich Presence olarak gösterir. Electron veya arka planda çalışan bir web arayüzü kullanmaz; uygulama doğrudan Win32 C++ ile yazılmıştır.
+TuneCord, YouTube ve YouTube Music'te çalan parçayı yerel Electron uygulamasına aktarır ve Discord'da **Listening / Dinliyor** Rich Presence olarak gösterir. Uygulama, extension ile aynı koyu pembe tema ve Windows tray deneyimini kullanır.
 
 ## Özellikler
 
@@ -9,7 +9,7 @@ TuneCord, YouTube ve YouTube Music'te çalan parçayı yerel Windows uygulaması
 - Tüm şarkıları ya da yalnızca seçilen playlistleri gösterme
 - Google hesabından playlistleri salt okunur YouTube Data API izniyle getirme
 - Windows açılışında otomatik ve doğrudan tray'de başlama
-- Dış bağımlılığı olmayan native `TuneCord.exe`
+- Extension ile eşleşen modern Electron masaüstü arayüzü
 - Yalnızca `127.0.0.1:37645` üzerinde dinleyen, rastgele anahtarlı local bridge
 
 ## 1. Windows uygulamasını kur
@@ -20,7 +20,7 @@ Hazır GitHub Actions paketinde PowerShell açıp şunu çalıştır:
 powershell -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
-Kaynak koddan derlemek için Visual Studio 2022'nin **Desktop development with C++** bileşeni kuruluysa `Build.ps1` çalıştır. Alternatif olarak `TuneCord.sln` dosyasını açıp `Release | x64` build al. Çıktı `dist\TuneCord.exe` olur.
+Kaynak koddan derlemek için Node.js 22+ kuruluysa `Build.ps1` çalıştır. Çıktı `dist\TuneCord.exe` olur.
 
 ## 2. Discord Application ID oluştur
 

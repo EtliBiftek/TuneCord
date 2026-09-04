@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>TuneCord</title>
+  <link rel="stylesheet" href="../extension/ui.css">
+  <link rel="stylesheet" href="desktop.css">
+</head>
+<body class="desktop">
+  <div class="titlebar">
+    <div class="brand"><div class="logo">T</div><span>TuneCord</span></div>
+  </div>
+  <main class="settings-shell">
+    <header class="app-header">
+      <div><span class="eyebrow">YOUTUBE MUSIC PRESENCE</span><h1>TuneCord</h1><p>YouTube ve YouTube Music’i Discord’da dinliyor olarak göster.</p></div>
+      <div id="connection" class="pill">Uygulama hazırlanıyor</div>
+    </header>
+
+    <section class="hero card">
+      <div class="now"><span class="eyebrow">ŞU AN ÇALIYOR</span><strong id="trackTitle">Bir şey çalmıyor</strong><span id="trackArtist">YouTube veya YouTube Music’te bir parça başlat.</span></div>
+      <div class="hero-status"><span id="extensionDot" class="status-dot"></span><span id="extensionState">Eklenti bekleniyor</span><span class="divider"></span><span id="discordDot" class="status-dot"></span><span id="discordState">Discord bekleniyor</span></div>
+    </section>
+
+    <div class="settings-grid">
+      <section class="card panel">
+        <span class="label">GENEL</span>
+        <label class="row toggle-row"><span><b>Discord’da göster</b><small>Rich Presence’i anında aç veya kapat</small></span><input id="enabled" type="checkbox"><i class="switch"></i></label>
+        <label class="row toggle-row"><span><b>Açılışta tray’de başlat</b><small>Windows açılınca arka planda hazır olur</small></span><input id="startup" type="checkbox"><i class="switch"></i></label>
+        <label class="field">DISCORD APPLICATION ID<input id="discordId" inputmode="numeric" maxlength="22" placeholder="123456789012345678"></label>
+        <div class="actions"><button id="reset" class="secondary">Eşleşmeyi sıfırla</button><button id="save" class="primary">Kaydet</button></div>
+        <p id="message" class="good"></p>
+      </section>
+
+      <section class="card panel">
+        <span class="label">GÖRÜNÜRLÜK</span>
+        <h2>Playlist filtresi</h2><p>İstersen yalnızca seçtiğin playlistlerde Presence gönder.</p>
+        <div class="mode-row"><label><input type="radio" name="mode" value="all"> Tüm şarkılar</label><label><input type="radio" name="mode" value="selected"> Seçili playlistler</label></div>
+        <div class="playlist-tools"><span id="playlistCount">0 playlist</span><span>Eklenti ayarlarından yenileyebilirsin.</span></div>
+      </section>
+    </div>
+
+    <section class="card panel playlists-panel">
+      <div class="playlist-head"><div><span class="label">PLAYLISTLER</span><h2>Dinlerken gösterilecekleri seç</h2></div><input id="search" class="search" placeholder="Playlist ara"></div>
+      <div id="playlistList" class="playlist-list"><p class="empty">Playlistler eklentiden geldiğinde burada görünür.</p></div>
+    </section>
+  </main>
+  <script src="renderer.js"></script>
+</body>
+</html>
