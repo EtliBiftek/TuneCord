@@ -258,7 +258,10 @@ $("reset").addEventListener("click", async () => {
   catch (error) { toast(error.message, true); }
 });
 $("openBrowser").addEventListener("click", async () => {
-  try { await window.tuneCord.launchBrowser(); toast("YouTube açıldı"); }
+  try {
+    const result = await window.tuneCord.launchBrowser();
+    toast(`${result?.browser || state.selectedBrowser?.name || "Tarayıcı"} eklenti sayfası açıldı`);
+  }
   catch (error) { toast(error.message, true); }
 });
 $("rerunSetup").addEventListener("click", async () => {
