@@ -1,8 +1,8 @@
 {
   "name": "tunecord",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "description": "YouTube and YouTube Music Discord presence bridge",
-  "main": "electron/bootstrap.js",
+  "main": "electron/ui-main.js",
   "author": "TuneCord",
   "license": "MIT",
   "scripts": {
@@ -18,38 +18,26 @@
     "productName": "TuneCord",
     "asar": true,
     "files": [
-      "electron/**/*",
+      "electron/ui-main.js",
+      "electron/preload.js",
+      "electron/renderer.js",
+      "electron/index.html",
+      "electron/desktop.css",
+      "electron/desktop-extra.css",
+      "electron/assets/**/*",
       "package.json"
     ],
     "extraResources": [
-      {
-        "from": "extension",
-        "to": "extension",
-        "filter": [
-          "**/*"
-        ]
-      },
-      {
-        "from": "extension-firefox",
-        "to": "extension-firefox",
-        "filter": [
-          "**/*"
-        ]
-      },
-      {
-        "from": "electron/assets/icon.png",
-        "to": "tunecord-icon.png"
-      }
+      { "from": "extension", "to": "extension", "filter": ["**/*"] },
+      { "from": "extension-firefox", "to": "extension-firefox", "filter": ["**/*"] },
+      { "from": "native-helper/target/release/tunecord-helper.exe", "to": "tunecord-helper.exe" },
+      { "from": "build/icon.ico", "to": "tunecord-icon.ico" }
     ],
     "win": {
-      "target": [
-        "portable"
-      ],
+      "target": ["portable"],
       "artifactName": "TuneCord.exe",
-      "icon": "build/icon.svg"
+      "icon": "build/icon.ico"
     },
-    "portable": {
-      "artifactName": "TuneCord.exe"
-    }
+    "portable": { "artifactName": "TuneCord.exe" }
   }
 }
