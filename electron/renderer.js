@@ -8,6 +8,13 @@ let saveChain = Promise.resolve();
 let discordTimer = null;
 let discordEditing = false;
 
+const artwork = document.createElement("img");
+artwork.className = "track-artwork";
+artwork.alt = "";
+artwork.hidden = true;
+document.querySelector(".now-art")?.prepend(artwork);
+artwork.addEventListener("error", () => { artwork.hidden = true; });
+
 function escapeHtml(value) {
   return String(value).replace(/[&<>'"]/g, char => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;"
@@ -54,7 +61,6 @@ function renderBrowserChoices() {
     $("browserNext").disabled = true;
     return;
   }
-
   for (const browser of detectedBrowsers) {
     const button = document.createElement("button");
     button.type = "button";
@@ -100,6 +106,20 @@ function renderPlaylists() {
     : '<p class="empty">Playlist bulunamadı. Eklenti ayarlarından YouTube oturumunu yenile.</p>';
 }
 
+function renderArtwork(track) {
+  const note = document.querySelector(".music-note");
+  const thumbnail = track?.playing && /^https:\/\//i.test(track?.thumbnail || "") ? track.thumbnail : "";
+  if (!thumbnail) {
+    artwork.hidden = true;
+    artwork.removeAttribute("src");
+    if (note) note.hidden = false;
+    return;
+  }
+  if (artwork.src !== thumbnail) artwork.src = thumbnail;
+  artwork.hidden = false;
+  if (note) note.hidden = true;
+}
+
 function render(next) {
   state = next || {};
   if (!state.setupComplete && !setupFlowActive) {
@@ -122,6 +142,9 @@ function render(next) {
   } else if (state.discordConnected) {
     connection.textContent = "Discord bağlı";
     connection.classList.add("online");
+  } else if (state.discordConnecting) {
+    connection.textContent = "Discord'a bağlanıyor";
+    connection.classList.remove("online");
   } else {
     connection.textContent = "Discord bekleniyor";
     connection.classList.remove("online");
@@ -130,12 +153,13 @@ function render(next) {
   $("extensionDot").classList.toggle("online", Boolean(state.extensionConnected));
   $("discordDot").classList.toggle("online", Boolean(state.discordConnected));
   $("extensionState").textContent = state.extensionConnected ? "Eklenti bağlı · WebSocket" : "Eklenti bekleniyor";
-  $("discordState").textContent = state.discordConnected ? "Discord bağlı" : "Discord bekleniyor";
+  $("discordState").textContent = state.discordConnected ? "Discord bağlı" : (state.discordConnecting ? "Discord'a bağlanıyor" : "Discord bekleniyor");
 
   $("trackTitle").textContent = state.track?.playing ? (state.track.title || "Bilinmeyen şarkı") : "Bir şey çalmıyor";
   $("trackArtist").textContent = state.track?.playing
     ? (state.track.artist || state.track.source || "YouTube")
     : "YouTube veya YouTube Music'te bir parça başlat.";
+  renderArtwork(state.track);
 
   $("playlistCount").textContent = `${state.playlists?.length || 0} playlist`;
   $("discordError").textContent = state.discordError || "";
@@ -169,12 +193,12 @@ $("rescanBrowsers").addEventListener("click", scanBrowsers);
 $("browserNext").addEventListener("click", () => {
   const browser = detectedBrowsers.find(item => item.id === selectedSetupBrowserId);
   if (!browser) return;
-  const manualReason = browser.id === "chrome"
+  const reason = browser.id === "chrome"
     ? "Google Chrome otomatik eklenti kurulumunu desteklemediği için son adımı sen tamamlayacaksın."
     : browser.id === "brave"
       ? "Brave çalışan profile komut satırıyla kalıcı eklenti eklemediği için güvenilir Load unpacked yöntemi kullanılacak."
       : "Chromium güvenlik modeli nedeniyle TuneCord dosyaları hazırlar; son Load unpacked onayını tarayıcıda sen verirsin.";
-  $("installDescription").textContent = `${browser.name} seçildi. ${manualReason}`;
+  $("installDescription").textContent = `${browser.name} seçildi. ${reason}`;
   $("installMessage").textContent = "";
   $("installExtension").textContent = "Dosyaları hazırla";
   setSetupStep(2);
@@ -209,10 +233,7 @@ $("skipSetup").addEventListener("click", async () => {
     $("installMessage").textContent = error.message;
   }
 });
-$("finishSetup").addEventListener("click", () => {
-  showApp();
-  render(state);
-});
+$("finishSetup").addEventListener("click", () => { showApp(); render(state); });
 
 $("enabled").addEventListener("change", event => persist({ enabled: event.target.checked }, "Presence ayarı anında kaydedildi."));
 $("startup").addEventListener("change", event => persist({ startup: event.target.checked }, "Başlangıç ayarı anında kaydedildi."));
@@ -229,22 +250,19 @@ $("discordId").addEventListener("input", event => {
     setMessage("Application ID tamamlanınca otomatik kaydedilecek.", false);
     return;
   }
-  discordTimer = setTimeout(() => persist({ discordAppId: appId }, "Application ID otomatik kaydedildi."), 300);
+  discordTimer = setTimeout(() => persist({ discordAppId: appId }, "Application ID kaydedildi; Discord'a bağlanılıyor."), 180);
 });
 
 $("search").addEventListener("input", renderPlaylists);
 $("playlistList").addEventListener("change", event => {
-  if (!event.target.matches('input[type="checkbox"]')) return;
-  persist({ selectedPlaylistIds: selectedIds() }, "Playlist seçimi anında kaydedildi.");
+  if (event.target.matches('input[type="checkbox"]')) persist({ selectedPlaylistIds: selectedIds() }, "Playlist seçimi anında kaydedildi.");
 });
 
 $("reset").addEventListener("click", async () => {
   try {
     await window.tuneCord.resetPairing();
     setMessage("WebSocket eşleşmesi yenilendi; eklenti otomatik yeniden bağlanacak.");
-  } catch (error) {
-    setMessage(error.message, true);
-  }
+  } catch (error) { setMessage(error.message, true); }
 });
 $("openBrowser").addEventListener("click", async () => {
   const button = $("openBrowser");
@@ -252,11 +270,8 @@ $("openBrowser").addEventListener("click", async () => {
   try {
     await window.tuneCord.launchBrowser();
     setMessage("Tarayıcı açıldı.");
-  } catch (error) {
-    setMessage(error.message, true);
-  } finally {
-    button.disabled = false;
-  }
+  } catch (error) { setMessage(error.message, true); }
+  finally { button.disabled = false; }
 });
 $("rerunSetup").addEventListener("click", async () => {
   state = await window.tuneCord.resetSetup();
@@ -266,10 +281,7 @@ $("rerunSetup").addEventListener("click", async () => {
 });
 
 window.tuneCord.onState(next => render(next));
-window.tuneCord.onBridgeError(message => {
-  $("discordError").textContent = `Yerel WebSocket: ${message}`;
-});
-
+window.tuneCord.onBridgeError(message => { $("discordError").textContent = `Yerel WebSocket: ${message}`; });
 window.tuneCord.state().then(next => {
   state = next;
   setupFlowActive = !next.setupComplete;

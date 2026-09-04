@@ -15,3 +15,12 @@
 .path-box code { overflow-wrap: anywhere; user-select: all; }
 .permission-card code { color: #f19abd; font-family: "Cascadia Code", Consolas, monospace; font-size: 10px; }
 .button-row.single-action > * { flex: 0 1 auto; }
+.track-artwork {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+  border-radius: inherit;
+}
+.track-artwork[hidden] { display: none; }
+.now-art:has(.track-artwork:not([hidden])) .music-note { display: none; }

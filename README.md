@@ -6,12 +6,14 @@ TuneCord, YouTube ve YouTube Music'te çalan parçayı yerel masaüstü uygulama
 
 - YouTube ve YouTube Music parça algılama
 - Discord Rich Presence
+- Şarkının YouTube kapak görselini Discord Rich Presence'ta gösterme
 - Tüm şarkılar veya yalnızca seçili playlistler
 - Windows ile otomatik başlatma
 - Tray desteği
 - Google OAuth yok
 - Yerel WebSocket bağlantısı
 - Uygulama ve eklenti ayarlarında **Kaydet** düğmesi yok; değişiklikler anında otomatik kaydedilir
+- Discord IPC bağlantısı paralel pipe taraması ve otomatik retry ile hızlı kurulur
 
 ## Kurulum
 
@@ -61,11 +63,11 @@ Aşağıdaki değişiklikler yapıldığı anda kaydedilir ve bağlı arayüzler
 - Tüm şarkılar / seçili playlistler modu
 - Playlist seçimleri
 
-Application ID yazılırken geçerli 17–22 haneli değer oluştuğunda yaklaşık 300 ms debounce sonrasında otomatik kaydedilir.
+Application ID yazılırken geçerli 17–22 haneli değer oluştuğunda kısa bir debounce sonrasında otomatik kaydedilir ve Discord bağlantısı hemen yeniden başlatılır.
 
 ## WebSocket bridge
 
-Eklenti ile masaüstü uygulaması artık REST/HTTP polling yerine yerel WebSocket üzerinden konuşur:
+Eklenti ile masaüstü uygulaması yerel WebSocket üzerinden konuşur:
 
 ```text
 ws://127.0.0.1:37645/ws
@@ -94,7 +96,13 @@ Playlistler, tarayıcıda zaten açık olan YouTube oturumunun `/feed/playlists`
 3. Değer geçerli hale geldiğinde otomatik kaydedilir.
 4. Discord masaüstü uygulamasını açık tut.
 
-TuneCord Discord IPC bağlantısında gerçek `READY` yanıtını bekler ve ardından `SET_ACTIVITY` gönderir. Web Discord masaüstü IPC sağlamadığı için desteklenmez.
+TuneCord `discord-ipc-0` ile `discord-ipc-9` pipe'larını paralel dener. İlk gerçek `READY` yanıtını veren bağlantıyı kullanır; ilk denemede yanıt gelmezse kısa aralıklarla otomatik yeniden dener. Bu sayede tek bir 5 saniyelik `READY` timeout'una takılı kalmaz.
+
+Web Discord masaüstü IPC sağlamadığı için desteklenmez.
+
+## Şarkı kapak görseli
+
+YouTube video ID'sinden alınan kapak görseli (`i.ytimg.com`) hem TuneCord uygulamasındaki **Şu an çalıyor** kartında hem de Discord Rich Presence'ın büyük görsel alanında kullanılır. Discord harici görsel URL'lerini Rich Presence asset'i olarak destekler.
 
 ## Playlist filtresi
 
