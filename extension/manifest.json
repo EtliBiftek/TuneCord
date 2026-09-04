@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "TuneCord - YouTube Discord Presence",
   "description": "YouTube ve YouTube Music'te dinlediğin parçayı Discord Rich Presence olarak gösterir.",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "minimum_chrome_version": "105",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAvKnH2eGbriLBdGxX8JUvlyWYRpk10hIi4BeLjwG4anBbGFjdtYB3JvTRGWQpWd/ZnlnYTC2dq+x8aCzxWpintcFk1JmkzYW+dYzpIyA8BYzZyvaW7lUJuQ92iEFcqt8X9HIwrEWNNB3jjDrHxMo1L1+tOcgS2ew9uoOQczguNHeLmSf/fQQ97YUfHl5+Ed18PvLw+tbk77syy4+VC4OkhbZ+w/BIYRVE4cbOlSalcIJSwR42i8Q5eopCdyqzlvLHo1/fsitpI4p4+SQ87ddVwAhKb8nGzHxaMIg5TNVs2ISAeeXYjelPigKIy2N00klYyulTSgsluUYXtQOuEl3AtwIDAQAB",
   "permissions": [
