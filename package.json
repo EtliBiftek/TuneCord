@@ -1,6 +1,6 @@
 {
   "name": "tunecord",
-  "version": "1.4.6",
+  "version": "1.4.7",
   "description": "YouTube and YouTube Music Discord presence bridge",
   "main": "electron/ui-main.js",
   "author": "TuneCord",
