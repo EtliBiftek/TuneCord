@@ -1,12 +1,10 @@
 const api = globalThis.browser || globalThis.chrome;
 const sessionStore = api.storage.session || api.storage.local;
-const BRIDGE = "ws://127.0.0.1:37645/ws";
+const NATIVE_HOST = "com.tunecord.bridge";
 const BROWSER_FAMILY = globalThis.browser ? "firefox" : "chromium";
-let socket = null;
-let connectPromise = null;
+let nativePort = null;
 let currentTabId = null;
 let requestSeq = 0;
-let handshakeSeq = 0;
 let reconnectTimer = null;
 const pending = new Map();
 
@@ -19,6 +17,10 @@ function badge(text, color) {
   if (color) swallow(api.action.setBadgeBackgroundColor({ color }));
 }
 
+function emitBridgeState(state) {
+  swallow(api.runtime.sendMessage({ type: "bridgeState", state }));
+}
+
 function rejectPending(error) {
   for (const { reject, timer } of pending.values()) {
     clearTimeout(timer);
@@ -27,21 +29,16 @@ function rejectPending(error) {
   pending.clear();
 }
 
-async function storedToken() {
-  const data = await api.storage.local.get("bridgeToken");
-  return data.bridgeToken || "";
+function nativeDisconnectReason() {
+  try { return api.runtime.lastError?.message || "TuneCord native bağlantısı kapandı."; }
+  catch (_) { return "TuneCord native bağlantısı kapandı."; }
 }
 
-function emitBridgeState(state) {
-  swallow(api.runtime.sendMessage({ type: "bridgeState", state }));
-}
-
-function closeSocket() {
-  const old = socket;
-  socket = null;
-  connectPromise = null;
-  if (old && (old.readyState === WebSocket.OPEN || old.readyState === WebSocket.CONNECTING)) {
-    try { old.close(); } catch (_) {}
+function closeNativePort() {
+  const port = nativePort;
+  nativePort = null;
+  if (port) {
+    try { port.disconnect(); } catch (_) {}
   }
 }
 
@@ -49,133 +46,71 @@ function scheduleReconnect(delay = 1200) {
   if (reconnectTimer) return;
   reconnectTimer = setTimeout(() => {
     reconnectTimer = null;
-    ensureSocket(false).catch(() => {});
+    bridgeRequest("ping").catch(() => {});
   }, delay);
 }
 
-async function ensureSocket(forcePair = false) {
-  if (forcePair) {
-    await api.storage.local.remove("bridgeToken");
-    closeSocket();
-  }
-  if (socket?.readyState === WebSocket.OPEN && socket.__authenticated) return socket;
-  if (connectPromise) return connectPromise;
-
-  connectPromise = (async () => {
-    let token = await storedToken();
-    return new Promise((resolve, reject) => {
-      const ws = new WebSocket(BRIDGE);
-      socket = ws;
-      const handshakeId = `hello-${Date.now()}-${++handshakeSeq}`;
-      let settled = false;
-      const timeout = setTimeout(() => {
-        if (!ws.__authenticated) {
-          try { ws.close(); } catch (_) {}
-          finishReject(new Error("TuneCord uygulamasına bağlanılamadı."));
-        }
-      }, 5000);
-
-      const finishResolve = value => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timeout);
-        resolve(value);
-      };
-      const finishReject = error => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timeout);
-        reject(error);
-      };
-      const sendHello = () => {
-        if (ws.readyState !== WebSocket.OPEN) return;
-        ws.send(JSON.stringify({
-          id: handshakeId,
-          type: "hello",
-          token,
-          extensionId: api.runtime.id,
-          browserFamily: BROWSER_FAMILY
-        }));
-      };
-
-      ws.onopen = sendHello;
-      ws.onmessage = async event => {
-        let message;
-        try { message = JSON.parse(event.data); } catch (_) { return; }
-
-        if (message.id === handshakeId) {
-          if (!message.ok && message.code === "PAIR_REQUIRED" && message.token) {
-            token = message.token;
-            await api.storage.local.set({ bridgeToken: token });
-            sendHello();
-            return;
-          }
-          if (!message.ok) {
-            finishReject(new Error(message.error || "TuneCord eşleşmesi başarısız."));
-            try { ws.close(); } catch (_) {}
-            return;
-          }
-          ws.__authenticated = true;
-          if (message.state) emitBridgeState(message.state);
-          badge("", null);
-          finishResolve(ws);
-          return;
-        }
-
-        if (message.type === "state" && message.state) {
-          emitBridgeState(message.state);
-          return;
-        }
-        if (message.type === "pair-reset") {
-          await api.storage.local.remove("bridgeToken");
-          return;
-        }
-        if (message.id && pending.has(message.id)) {
-          const entry = pending.get(message.id);
-          pending.delete(message.id);
-          clearTimeout(entry.timer);
-          if (message.ok === false) entry.reject(new Error(message.error || "TuneCord isteği başarısız."));
-          else entry.resolve(message);
-        }
-      };
-
-      ws.onerror = () => badge("!", "#d92d69");
-      ws.onclose = () => {
-        if (socket === ws) socket = null;
-        rejectPending(new Error("TuneCord bağlantısı kapandı."));
-        badge("!", "#d92d69");
-        if (!ws.__authenticated) finishReject(new Error("TuneCord uygulaması bulunamadı."));
-        scheduleReconnect();
-      };
-    });
-  })();
-
+function ensureNativePort() {
+  if (nativePort) return nativePort;
+  let port;
   try {
-    const connected = await connectPromise;
-    connectPromise = null;
-    return connected;
+    port = api.runtime.connectNative(NATIVE_HOST);
   } catch (error) {
-    connectPromise = null;
-    throw error;
+    throw new Error(error?.message || "TuneCord native messaging başlatılamadı.");
   }
+  nativePort = port;
+
+  port.onMessage.addListener(message => {
+    if (message?.type === "state" && message.state) {
+      emitBridgeState(message.state);
+      return;
+    }
+    if (message?.state) emitBridgeState(message.state);
+    if (message?.id && pending.has(message.id)) {
+      const entry = pending.get(message.id);
+      pending.delete(message.id);
+      clearTimeout(entry.timer);
+      if (message.ok === false) entry.reject(new Error(message.error || "TuneCord isteği başarısız."));
+      else entry.resolve(message);
+    }
+  });
+
+  port.onDisconnect.addListener(() => {
+    if (nativePort === port) nativePort = null;
+    const error = new Error(nativeDisconnectReason());
+    rejectPending(error);
+    badge("!", "#d92d69");
+    scheduleReconnect();
+  });
+
+  return port;
 }
 
-async function bridgeRequest(type, payload = {}, forcePair = false) {
-  const ws = await ensureSocket(forcePair);
+async function bridgeRequest(type, payload = {}, forceReconnect = false) {
+  if (forceReconnect) closeNativePort();
+  const port = ensureNativePort();
   const id = `${Date.now()}-${++requestSeq}`;
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       pending.delete(id);
-      reject(new Error("TuneCord isteği zaman aşımına uğradı."));
+      reject(new Error("TuneCord native isteği zaman aşımına uğradı."));
+      closeNativePort();
     }, 5000);
     pending.set(id, { resolve, reject, timer });
-    try { ws.send(JSON.stringify({ id, type, ...payload })); }
-    catch (error) { pending.delete(id); clearTimeout(timer); reject(error); }
+    try {
+      port.postMessage({ id, type, browserFamily: BROWSER_FAMILY, ...payload });
+    } catch (error) {
+      pending.delete(id);
+      clearTimeout(timer);
+      reject(error);
+      closeNativePort();
+    }
   });
 }
 
-async function getStatus(forcePair = false) {
-  const reply = await bridgeRequest("getStatus", {}, forcePair);
+async function getStatus(forceReconnect = false) {
+  const reply = await bridgeRequest("getStatus", {}, forceReconnect);
+  badge("", null);
   return reply.state || {};
 }
 
@@ -282,7 +217,7 @@ api.runtime.onMessage.addListener((message, sender, sendResponse) => {
       case "bridgeState": return { ok: true };
       case "playlistState": {
         const local = await api.storage.local.get(["sessionConnected", "lastPlaylistSync"]);
-        return { ...local, extensionId: api.runtime.id, browserFamily: BROWSER_FAMILY, transport: "websocket" };
+        return { ...local, extensionId: api.runtime.id, browserFamily: BROWSER_FAMILY, transport: "native-messaging" };
       }
       default: throw new Error("Bilinmeyen istek.");
     }
@@ -303,12 +238,11 @@ api.tabs.onRemoved.addListener(async tabId => {
 
 api.runtime.onInstalled.addListener(async ({ reason }) => {
   if (reason === "install") swallow(api.runtime.openOptionsPage());
-  try { await ensureSocket(false); } catch (_) {}
+  try { await getStatus(false); } catch (_) {}
 });
 
 setInterval(() => {
-  if (socket?.readyState === WebSocket.OPEN && socket.__authenticated) bridgeRequest("ping").catch(() => {});
-  else ensureSocket(false).catch(() => {});
-}, 15000);
+  bridgeRequest("ping").catch(() => {});
+}, 20000);
 
-ensureSocket(false).catch(() => {});
+getStatus(false).catch(() => {});
