@@ -82,11 +82,15 @@ function replaceHelperBinary(source, target) {
 }
 
 function addRegistryNativeHost(key, manifestPath) {
-  const result = spawnSync("reg.exe", ["add", key, "/ve", "/t", "REG_SZ", "/d", manifestPath, "/f"], {
-    windowsHide: true,
-    encoding: "utf8"
-  });
-  return !result.error && result.status === 0;
+  let ok = false;
+  for (const view of ["32", "64"]) {
+    const result = spawnSync("reg.exe", ["add", key, "/ve", "/t", "REG_SZ", "/d", manifestPath, "/f", `/reg:${view}`], {
+      windowsHide: true,
+      encoding: "utf8"
+    });
+    if (!result.error && result.status === 0) ok = true;
+  }
+  return ok;
 }
 
 function registerNativeMessaging(nativeHostPath) {
@@ -118,8 +122,11 @@ function registerNativeMessaging(nativeHostPath) {
     `HKCU\\Software\\Vivaldi\\NativeMessagingHosts\\${NATIVE_HOST}`,
     `HKCU\\Software\\Opera Software\\Opera Stable\\NativeMessagingHosts\\${NATIVE_HOST}`
   ];
-  for (const key of chromiumKeys) addRegistryNativeHost(key, chromiumManifestPath);
-  addRegistryNativeHost(`HKCU\\Software\\Mozilla\\NativeMessagingHosts\\${NATIVE_HOST}`, firefoxManifestPath);
+  const chromiumRegistered = chromiumKeys.some(key => addRegistryNativeHost(key, chromiumManifestPath));
+  const firefoxRegistered = addRegistryNativeHost(`HKCU\\Software\\Mozilla\\NativeMessagingHosts\\${NATIVE_HOST}`, firefoxManifestPath);
+  if (!chromiumRegistered && !firefoxRegistered) {
+    throw new Error("TuneCord Native Messaging kaydı Windows kayıt defterine yazılamadı.");
+  }
 }
 
 async function ensureHelper() {
