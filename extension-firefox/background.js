@@ -241,8 +241,10 @@ api.runtime.onInstalled.addListener(async ({ reason }) => {
   try { await getStatus(false); } catch (_) {}
 });
 
+// Native helper'ın HTTP->WebSocket yükseltmesinden kalan 5 sn okuma timeout'una
+// takılmamak ve bağlantı durumunu canlı tutmak için hafif bir yerel keepalive.
 setInterval(() => {
   bridgeRequest("ping").catch(() => {});
-}, 20000);
+}, 3000);
 
 getStatus(false).catch(() => {});
