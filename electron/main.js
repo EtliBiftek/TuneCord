@@ -20,11 +20,14 @@ let mainWindow;
 let tray;
 let server;
 let discord;
+let discordReady = false;
 let discordConnected = false;
+let discordReceiveBuffer = Buffer.alloc(0);
+let discordError = "";
 let extensionSeenAt = 0;
 let config = { ...DEFAULT_CONFIG };
 let track = emptyTrack();
-let lastPresenceKey = "";
+let lastPresenceKey = null;
 
 function emptyTrack() {
   return { title: "", artist: "", videoId: "", playlistId: "", url: "", thumbnail: "", duration: 0, currentTime: 0, playing: false, source: "" };
@@ -61,6 +64,7 @@ function status() {
     startup: config.startup,
     extensionConnected: Date.now() - extensionSeenAt < 35000,
     discordConnected,
+    discordError,
     track
   };
 }
@@ -76,52 +80,166 @@ function mayShowTrack() {
 }
 
 function closeDiscord() {
-  if (discord) discord.destroy();
+  const socket = discord;
   discord = undefined;
+  discordReady = false;
   discordConnected = false;
+  discordReceiveBuffer = Buffer.alloc(0);
+  lastPresenceKey = null;
+  if (socket && !socket.destroyed) socket.destroy();
 }
 
 function discordFrame(op, body) {
-  const payload = Buffer.from(JSON.stringify(body));
+  const payload = Buffer.from(JSON.stringify(body ?? {}));
   const header = Buffer.alloc(8);
   header.writeInt32LE(op, 0);
   header.writeInt32LE(payload.length, 4);
   return Buffer.concat([header, payload]);
 }
 
+function discordErrorText(payload, fallback = "Discord RPC hatası.") {
+  const code = payload?.data?.code ?? payload?.code;
+  const message = payload?.data?.message || payload?.message || fallback;
+  return code ? `${message} (${code})` : message;
+}
+
+function handleDiscordFrame(socket, op, payload) {
+  if (discord !== socket) return;
+
+  if (op === 3) {
+    if (!socket.destroyed) socket.write(discordFrame(4, payload));
+    return;
+  }
+
+  if (op === 2) {
+    discordError = discordErrorText(payload, "Discord IPC bağlantıyı kapattı.");
+    socket.destroy();
+    return;
+  }
+
+  if (op !== 1) return;
+
+  if (payload?.evt === "READY") {
+    discordReady = true;
+    discordConnected = true;
+    discordError = "";
+    lastPresenceKey = null;
+    sendStatus();
+    processPresence();
+    return;
+  }
+
+  if (payload?.evt === "ERROR") {
+    discordError = discordErrorText(payload);
+    sendStatus();
+    if (!discordReady) socket.destroy();
+  }
+}
+
+function consumeDiscordData(socket, chunk) {
+  if (discord !== socket) return;
+  discordReceiveBuffer = Buffer.concat([discordReceiveBuffer, chunk]);
+
+  while (discordReceiveBuffer.length >= 8) {
+    const op = discordReceiveBuffer.readInt32LE(0);
+    const length = discordReceiveBuffer.readInt32LE(4);
+
+    if (length < 0 || length > 4 * 1024 * 1024) {
+      discordError = "Discord IPC geçersiz bir frame gönderdi.";
+      sendStatus();
+      socket.destroy();
+      return;
+    }
+
+    if (discordReceiveBuffer.length < 8 + length) return;
+
+    const payloadBytes = discordReceiveBuffer.subarray(8, 8 + length);
+    discordReceiveBuffer = discordReceiveBuffer.subarray(8 + length);
+
+    let payload = {};
+    try {
+      payload = payloadBytes.length ? JSON.parse(payloadBytes.toString("utf8")) : {};
+    } catch (_) {
+      discordError = "Discord IPC yanıtı okunamadı.";
+      sendStatus();
+      socket.destroy();
+      return;
+    }
+
+    handleDiscordFrame(socket, op, payload);
+    if (discord !== socket || socket.destroyed) return;
+  }
+}
+
 function connectDiscord() {
   if (!config.discordAppId || discord) return;
+
   let index = 0;
   const tryNext = () => {
-    if (index >= 10 || discord) return;
+    if (discord) return;
+
+    if (index >= 10) {
+      discordReady = false;
+      discordConnected = false;
+      if (!discordError) discordError = "Discord masaüstü IPC bağlantısı bulunamadı.";
+      sendStatus();
+      return;
+    }
+
     const socket = net.createConnection(`\\\\?\\pipe\\discord-ipc-${index++}`);
-    let failed = false;
-    socket.once("error", () => { failed = true; socket.destroy(); tryNext(); });
+    let connected = false;
+
     socket.once("connect", () => {
-      if (failed) return;
+      connected = true;
       discord = socket;
-      socket.write(discordFrame(0, { v: 1, client_id: config.discordAppId }));
-      socket.on("data", () => {
-        discordConnected = true;
-        sendStatus();
-      });
+      discordReady = false;
+      discordConnected = false;
+      discordReceiveBuffer = Buffer.alloc(0);
+      discordError = "";
+      lastPresenceKey = null;
+
+      socket.on("data", chunk => consumeDiscordData(socket, chunk));
       socket.on("close", () => {
         if (discord === socket) {
           discord = undefined;
+          discordReady = false;
           discordConnected = false;
-          lastPresenceKey = "";
+          discordReceiveBuffer = Buffer.alloc(0);
+          lastPresenceKey = null;
           sendStatus();
         }
       });
-      socket.on("error", () => {});
-      setTimeout(processPresence, 160);
+
+      socket.write(discordFrame(0, { v: 1, client_id: config.discordAppId }));
+
+      setTimeout(() => {
+        if (discord === socket && !discordReady && !socket.destroyed) {
+          discordError = discordError || "Discord READY yanıtı gelmedi.";
+          sendStatus();
+          socket.destroy();
+        }
+      }, 5000);
+    });
+
+    socket.on("error", error => {
+      if (!connected) {
+        socket.destroy();
+        tryNext();
+        return;
+      }
+
+      if (discord === socket) {
+        discordError = error?.message || "Discord IPC bağlantı hatası.";
+        sendStatus();
+      }
     });
   };
+
   tryNext();
 }
 
 function sendDiscordActivity(activity) {
-  if (!discord || discord.destroyed) return;
+  if (!discord || discord.destroyed || !discordReady) return;
   discord.write(discordFrame(1, {
     cmd: "SET_ACTIVITY",
     nonce: crypto.randomUUID(),
@@ -132,24 +250,34 @@ function sendDiscordActivity(activity) {
 function processPresence() {
   const shouldShow = mayShowTrack();
   const key = shouldShow ? `${config.discordAppId}\n${track.videoId}\n${track.title}\n${track.artist}\n${track.playlistId}` : "";
+
   if (!config.discordAppId) {
+    discordError = "";
     closeDiscord();
     return;
   }
+
   connectDiscord();
-  if (!discord || key === lastPresenceKey) return;
+  if (!discord || !discordReady || key === lastPresenceKey) return;
+
   lastPresenceKey = key;
+
   if (!shouldShow) {
     sendDiscordActivity(null);
     return;
   }
+
   const activity = {
     type: 2,
     details: track.title.slice(0, 128),
     state: track.artist.slice(0, 128),
-    timestamps: track.duration > 0 ? { start: Math.floor(Date.now() / 1000 - track.currentTime), end: Math.floor(Date.now() / 1000 - track.currentTime + track.duration) } : undefined,
+    timestamps: track.duration > 0 ? {
+      start: Math.floor(Date.now() / 1000 - track.currentTime),
+      end: Math.floor(Date.now() / 1000 - track.currentTime + track.duration)
+    } : undefined,
     buttons: track.url ? [{ label: "YouTube'da Aç", url: track.url }] : undefined
   };
+
   sendDiscordActivity(activity);
 }
 
@@ -178,26 +306,32 @@ async function bridgeHandler(request, response) {
   if (request.method === "GET" && url.pathname === "/api/pair") return respond(response, 200, { token: config.bridgeToken });
   if (!authorized(request)) return respond(response, 401, { error: "Eşleşme gerekli." });
   extensionSeenAt = Date.now();
+
   try {
     if (request.method === "GET" && url.pathname === "/api/status") return respond(response, 200, status());
+
     const body = await parseJson(request);
+
     if (request.method === "POST" && url.pathname === "/api/track") {
       track = { ...emptyTrack(), ...body, playing: Boolean(body.playing), duration: Number(body.duration) || 0, currentTime: Number(body.currentTime) || 0 };
-      lastPresenceKey = "";
+      lastPresenceKey = null;
     } else if (request.method === "POST" && url.pathname === "/api/stop") {
       track = emptyTrack();
-      lastPresenceKey = "";
+      lastPresenceKey = null;
     } else if (request.method === "POST" && url.pathname === "/api/control") {
       if (typeof body.enabled === "boolean") config.enabled = body.enabled;
       if (typeof body.selectedOnly === "boolean") config.selectedOnly = body.selectedOnly;
       saveConfig();
-      lastPresenceKey = "";
+      lastPresenceKey = null;
     } else if (request.method === "POST" && url.pathname === "/api/playlists") {
       const items = Array.isArray(body.items) ? body.items : [];
       config.playlists = items.map(item => ({ id: String(item.id || ""), title: String(item.title || item.id || "") })).filter(item => item.id);
       config.selectedPlaylistIds = config.selectedPlaylistIds.filter(id => config.playlists.some(item => item.id === id));
       saveConfig();
-    } else return respond(response, 404, { error: "Bulunamadı." });
+    } else {
+      return respond(response, 404, { error: "Bulunamadı." });
+    }
+
     processPresence();
     sendStatus();
     respond(response, 200, status());
@@ -221,12 +355,20 @@ function createTray() {
   const traySvg = `<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32"><rect width="32" height="32" rx="9" fill="#be185d"/><path d="M10 9h12v4h-4v10.3a4.5 4.5 0 1 1-3-4.24V13h-5z" fill="white"/></svg>`;
   tray = new Tray(nativeImage.createFromDataURL(`data:image/svg+xml;base64,${Buffer.from(traySvg).toString("base64")}`));
   tray.setToolTip("TuneCord");
+
   const refresh = () => tray.setContextMenu(Menu.buildFromTemplate([
     { label: "TuneCord'u aç", click: showWindow },
-    { label: "Discord'da göster", type: "checkbox", checked: config.enabled, click: item => { config.enabled = item.checked; saveConfig(); lastPresenceKey = ""; processPresence(); sendStatus(); } },
+    { label: "Discord'da göster", type: "checkbox", checked: config.enabled, click: item => {
+      config.enabled = item.checked;
+      saveConfig();
+      lastPresenceKey = null;
+      processPresence();
+      sendStatus();
+    } },
     { type: "separator" },
     { label: "Çıkış", click: () => { app.isQuitting = true; app.quit(); } }
   ]));
+
   refresh();
   tray.on("click", showWindow);
   setInterval(refresh, 1500);
@@ -244,9 +386,13 @@ function createWindow() {
     titleBarOverlay: { color: "#120d11", symbolColor: "#f8f5f7", height: 36 },
     webPreferences: { preload: path.join(__dirname, "preload.js"), contextIsolation: true, nodeIntegration: false }
   });
+
   mainWindow.loadFile(path.join(__dirname, "index.html"));
   mainWindow.on("close", event => {
-    if (!app.isQuitting) { event.preventDefault(); mainWindow.hide(); }
+    if (!app.isQuitting) {
+      event.preventDefault();
+      mainWindow.hide();
+    }
   });
   mainWindow.webContents.on("did-finish-load", sendStatus);
 }
@@ -260,16 +406,27 @@ ipcMain.handle("save", (_, next) => {
   if (Array.isArray(next.selectedPlaylistIds)) config.selectedPlaylistIds = next.selectedPlaylistIds;
   saveConfig();
   closeDiscord();
-  lastPresenceKey = "";
+  discordError = "";
+  lastPresenceKey = null;
   processPresence();
   sendStatus();
   return status();
 });
-ipcMain.handle("reset-pairing", () => { config.bridgeToken = crypto.randomBytes(24).toString("hex"); saveConfig(); return { token: config.bridgeToken }; });
-ipcMain.handle("window", (_, action) => { if (action === "minimize") mainWindow.minimize(); if (action === "close") mainWindow.hide(); });
+
+ipcMain.handle("reset-pairing", () => {
+  config.bridgeToken = crypto.randomBytes(24).toString("hex");
+  saveConfig();
+  return { token: config.bridgeToken };
+});
+
+ipcMain.handle("window", (_, action) => {
+  if (action === "minimize") mainWindow.minimize();
+  if (action === "close") mainWindow.hide();
+});
 
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) app.quit();
+
 app.on("second-instance", showWindow);
 app.whenReady().then(() => {
   loadConfig();
@@ -279,4 +436,9 @@ app.whenReady().then(() => {
   setInterval(() => { processPresence(); sendStatus(); }, 5000);
   if (!process.argv.includes("--tray")) showWindow();
 });
-app.on("before-quit", () => { app.isQuitting = true; if (server) server.close(); closeDiscord(); });
+
+app.on("before-quit", () => {
+  app.isQuitting = true;
+  if (server) server.close();
+  closeDiscord();
+});
