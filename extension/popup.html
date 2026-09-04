@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>TuneCord</title>
+  <link rel="stylesheet" href="ui.css">
+</head>
+<body class="popup">
+  <header>
+    <div class="logo">R</div>
+    <div><h1>TuneCord</h1><p id="bridgeState">Uygulama aranıyor…</p></div>
+  </header>
+
+  <main>
+    <section class="card now">
+      <span class="eyebrow">ŞU AN</span>
+      <strong id="trackTitle">Bir şey çalmıyor</strong>
+      <span id="trackArtist">YouTube'u açıp bir şarkı başlat.</span>
+    </section>
+
+    <label class="row toggle-row">
+      <span><b>Discord'da göster</b><small>Rich Presence'i anında kapat/aç</small></span>
+      <input id="enabled" type="checkbox"><i class="switch"></i>
+    </label>
+
+    <section class="card compact">
+      <span class="label">GÖRÜNÜRLÜK</span>
+      <label><input type="radio" name="mode" value="all"> Tüm şarkılar</label>
+      <label><input type="radio" name="mode" value="selected"> Yalnızca seçili playlistler</label>
+    </section>
+
+    <div class="actions">
+      <button id="retry" class="secondary">Yeniden bağlan</button>
+      <button id="settings" class="primary">Ayarlar</button>
+    </div>
+    <p id="error" class="error" hidden></p>
+  </main>
+  <script src="popup.js"></script>
+</body>
+</html>
